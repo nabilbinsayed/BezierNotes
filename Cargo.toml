@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "inkwell/crates/inkwell-core",
+    "inkwell/crates/inkwell-pdf",
+    "inkwell-app/src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = 0
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+strip = true

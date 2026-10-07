@@ -378,6 +378,12 @@ fn replay_wal_journal(
 #[tauri::command]
 pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<OpenPdfResult, String> {
     let path = PathBuf::from(&path_str);
+    if path_str.contains("..") || path.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Path traversal components (..) are not permitted in open path".to_string());
+    }
+    if !path.exists() || !path.is_file() {
+        return Err(format!("File does not exist: {path:?}"));
+    }
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
     let arc_bytes = Arc::new(bytes);
