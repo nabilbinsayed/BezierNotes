@@ -609,3 +609,262 @@ export function duplicateSelection(activeSheet = 0, offset = 18) {
   _clipboard = tempClipboard;
   return result;
 }
+
+// ---- Vector SVG Clipping for Obsidian & LaTeX ----
+
+class SvgPathRecorder {
+  constructor(offsetX = 0, offsetY = 0) {
+    this.offsetX = offsetX;
+    this.offsetY = offsetY;
+    this.d = '';
+  }
+  moveTo(x, y) {
+    this.d += `M ${(x - this.offsetX).toFixed(2)} ${(y - this.offsetY).toFixed(2)} `;
+  }
+  lineTo(x, y) {
+    this.d += `L ${(x - this.offsetX).toFixed(2)} ${(y - this.offsetY).toFixed(2)} `;
+  }
+  bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y) {
+    this.d += `C ${(cp1x - this.offsetX).toFixed(2)} ${(cp1y - this.offsetY).toFixed(2)}, ${(cp2x - this.offsetX).toFixed(2)} ${(cp2y - this.offsetY).toFixed(2)}, ${(x - this.offsetX).toFixed(2)} ${(y - this.offsetY).toFixed(2)} `;
+  }
+  arc(cx, cy, r, sa, ea, ccw = false) {
+    const startX = cx + r * Math.cos(sa);
+    const startY = cy + r * Math.sin(sa);
+    const endX = cx + r * Math.cos(ea);
+    const endY = cy + r * Math.sin(ea);
+
+    this.d += `L ${(startX - this.offsetX).toFixed(2)} ${(startY - this.offsetY).toFixed(2)} `;
+
+    let diff = ea - sa;
+    if (!ccw && diff < 0) diff += Math.PI * 2;
+    if (ccw && diff > 0) diff -= Math.PI * 2;
+    const absDiff = Math.abs(diff);
+    const largeArc = absDiff > Math.PI ? 1 : 0;
+    const sweep = ccw ? 0 : 1;
+
+    if (absDiff >= Math.PI * 1.999) {
+      const midX = cx - r * Math.cos(sa);
+      const midY = cy - r * Math.sin(sa);
+      this.d += `A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 ${sweep} ${(midX - this.offsetX).toFixed(2)} ${(midY - this.offsetY).toFixed(2)} `;
+      this.d += `A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 ${sweep} ${(startX - this.offsetX).toFixed(2)} ${(startY - this.offsetY).toFixed(2)} `;
+    } else {
+      this.d += `A ${r.toFixed(2)} ${r.toFixed(2)} 0 ${largeArc} ${sweep} ${(endX - this.offsetX).toFixed(2)} ${(endY - this.offsetY).toFixed(2)} `;
+    }
+  }
+  closePath() {
+    this.d += 'Z ';
+  }
+}
+
+function escapeXml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+export function getSelectionBbox() {
+  const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
+  const images = (state.selectedImages || []).filter(img => !img.deleted);
+  const texts = (state.selectedTextObjects || []).filter(t => !t.deleted);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let hasItems = false;
+
+  for (const s of strokes) {
+    const halfW = (s.base_width || 2) / 2;
+    for (const pt of (s.points || s._pts || [])) {
+      const w = (pt.w !== undefined ? pt.w / 2 : halfW) || halfW;
+      minX = Math.min(minX, pt.x - w);
+      minY = Math.min(minY, pt.y - w);
+      maxX = Math.max(maxX, pt.x + w);
+      maxY = Math.max(maxY, pt.y + w);
+      hasItems = true;
+    }
+  }
+
+  for (const img of images) {
+    minX = Math.min(minX, img.x);
+    minY = Math.min(minY, img.y);
+    maxX = Math.max(maxX, img.x + img.width);
+    maxY = Math.max(maxY, img.y + img.height);
+    hasItems = true;
+  }
+
+  for (const t of texts) {
+    minX = Math.min(minX, t.x);
+    minY = Math.min(minY, t.y);
+    maxX = Math.max(maxX, t.x + (t.width || 120));
+    maxY = Math.max(maxY, t.y + (t.height || 32));
+    hasItems = true;
+  }
+
+  if (!hasItems) return null;
+  return [minX, minY, maxX, maxY];
+}
+
+export function serializeSelectionToSvg() {
+  const bbox = getSelectionBbox();
+  if (!bbox) return null;
+
+  const pad = 12;
+  const minX = bbox[0] - pad;
+  const minY = bbox[1] - pad;
+  const maxX = bbox[2] + pad;
+  const maxY = bbox[3] + pad;
+  const w = Math.max(10, Math.round(maxX - minX));
+  const h = Math.max(10, Math.round(maxY - minY));
+
+  const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
+  const images = (state.selectedImages || []).filter(img => !img.deleted);
+  const texts = (state.selectedTextObjects || []).filter(t => !t.deleted);
+
+  let svgElements = '';
+
+  // 1. Images
+  for (const img of images) {
+    const url = img.dataUrl || img.data_url || '';
+    if (url) {
+      const ix = (img.x - minX).toFixed(2);
+      const iy = (img.y - minY).toFixed(2);
+      const iw = (img.width || 100).toFixed(2);
+      const ih = (img.height || 100).toFixed(2);
+      svgElements += `  <image href="${escapeXml(url)}" x="${ix}" y="${iy}" width="${iw}" height="${ih}" />\n`;
+    }
+  }
+
+  // 2. Strokes
+  for (const s of strokes) {
+    const rawPts = s.points || s._pts || [];
+    if (!rawPts.length) continue;
+    const baseW = s.base_width || s.baseWidth || 2.0;
+    const isHighlighter = s.kind === 'highlighter';
+    const rgb = s.rgb || [0, 0, 0];
+    const color = `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+
+    const recorder = new SvgPathRecorder(minX, minY);
+    if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {
+      window.Ink.traceRibbonContour(recorder, rawPts, baseW);
+    } else {
+      recorder.moveTo(rawPts[0].x, rawPts[0].y);
+      for (let i = 1; i < rawPts.length; i++) {
+        recorder.lineTo(rawPts[i].x, rawPts[i].y);
+      }
+    }
+
+    const pathData = recorder.d.trim();
+    if (pathData) {
+      if (isHighlighter) {
+        svgElements += `  <path d="${pathData}" fill="${color}" opacity="0.45" style="mix-blend-mode: multiply;" />\n`;
+      } else {
+        svgElements += `  <path d="${pathData}" fill="${color}" />\n`;
+      }
+    }
+  }
+
+  // 3. Text objects
+  for (const t of texts) {
+    const lines = (t.text || '').split('\n');
+    const fs = t.fontSize || 16;
+    const color = t.color || '#141724';
+    const tx = (t.x - minX).toFixed(2);
+    lines.forEach((line, idx) => {
+      const ty = (t.y - minY + (idx + 1) * fs * 1.2).toFixed(2);
+      svgElements += `  <text x="${tx}" y="${ty}" font-size="${fs}" font-family="Inter, system-ui, sans-serif" fill="${color}">${escapeXml(line)}</text>\n`;
+    });
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">\n${svgElements}</svg>`;
+}
+
+export async function copySelectionAsSvg() {
+  const svgString = serializeSelectionToSvg();
+  if (!svgString) {
+    emit('toast', { message: 'No selection to copy as SVG', type: 'info' });
+    return false;
+  }
+
+  const bbox = getSelectionBbox();
+  const pad = 12;
+  const minX = bbox[0] - pad;
+  const minY = bbox[1] - pad;
+  const maxX = bbox[2] + pad;
+  const maxY = bbox[3] + pad;
+  const w = Math.max(10, Math.round(maxX - minX));
+  const h = Math.max(10, Math.round(maxY - minY));
+
+  let pngBlob = null;
+  try {
+    const dpr = 2.0;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.scale(dpr, dpr);
+      ctx.translate(-minX, -minY);
+
+      const images = (state.selectedImages || []).filter(img => !img.deleted);
+      for (const img of images) {
+        if (img._el && img._el.complete) {
+          ctx.drawImage(img._el, img.x, img.y, img.width, img.height);
+        }
+      }
+
+      const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
+      for (const s of strokes) {
+        if (window.Ink && typeof window.Ink.drawStroke === 'function') {
+          window.Ink.drawStroke(ctx, s);
+        }
+      }
+
+      const texts = (state.selectedTextObjects || []).filter(t => !t.deleted);
+      for (const t of texts) {
+        const lines = (t.text || '').split('\n');
+        const fs = t.fontSize || 16;
+        ctx.font = `${fs}px Inter, system-ui, sans-serif`;
+        ctx.fillStyle = t.color || '#141724';
+        lines.forEach((line, idx) => {
+          ctx.fillText(line, t.x, t.y + (idx + 1) * fs * 1.2);
+        });
+      }
+
+      pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    }
+  } catch (err) {
+    console.warn('[inkwell/clipboard] PNG rasterization failed:', err);
+  }
+
+  let copied = false;
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    try {
+      const items = {
+        'text/plain': new Blob([svgString], { type: 'text/plain' }),
+        'image/svg+xml': new Blob([svgString], { type: 'image/svg+xml' }),
+      };
+      if (pngBlob) {
+        items['image/png'] = pngBlob;
+      }
+      await navigator.clipboard.write([new ClipboardItem(items)]);
+      copied = true;
+    } catch (_) {
+      try {
+        if (typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(svgString);
+          copied = true;
+        }
+      } catch (err) {
+        console.warn('[inkwell/clipboard] writeText fallback failed:', err);
+      }
+    }
+  }
+
+  if (copied) {
+    emit('toast', { message: 'Copied selection as SVG / Vector graphic', type: 'success' });
+  } else {
+    emit('toast', { message: 'Failed to write to clipboard', type: 'error' });
+  }
+  return copied;
+}

@@ -405,6 +405,7 @@ with sync_playwright() as pw:
     ctx_visible = pg.evaluate("!document.getElementById('canvasContextMenu').classList.contains('hidden')")
     ctx_items_ok = pg.evaluate("""
     !!(document.getElementById('ctxMenuCopy') &&
+       document.getElementById('ctxMenuCopySvg') &&
        document.getElementById('ctxMenuCut') &&
        document.getElementById('ctxMenuPaste') &&
        document.getElementById('ctxMenuDuplicate') &&
@@ -417,6 +418,47 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(50)
     ctx_hidden = pg.evaluate("document.getElementById('canvasContextMenu').classList.contains('hidden')")
     check("clicking outside dismisses canvas context menu", ctx_hidden)
+
+    # Plan 065: Vector Clipping to Obsidian & LaTeX (SVG Serializer)
+    svg_export_ok = pg.evaluate("""async () => {
+        const { state } = await import('./js/core/state.js');
+        const clipboard = await import('./js/core/clipboard.js');
+        const mockStroke = {
+            id: 'stk_svg_test_1',
+            sheet: 0,
+            kind: 'pen',
+            rgb: [0.1, 0.2, 0.3],
+            base_width: 2.5,
+            points: [
+                { x: 100, y: 100, p: 0.5, w: 2.5 },
+                { x: 150, y: 120, p: 0.7, w: 3.0 },
+                { x: 200, y: 160, p: 0.8, w: 3.2 }
+            ],
+            deleted: false
+        };
+        state.selectedStrokes = [mockStroke];
+        state.selectedImages = [];
+        state.selectedTextObjects = [];
+
+        const svgStr = clipboard.serializeSelectionToSvg();
+        if (!svgStr || !svgStr.includes('<svg') || !svgStr.includes('<path')) {
+            return { ok: false, reason: 'Missing svg or path tags', svg: svgStr };
+        }
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgStr, 'image/svg+xml');
+        const parseError = doc.querySelector('parsererror');
+        if (parseError) {
+            return { ok: false, reason: 'XML parse error: ' + parseError.textContent };
+        }
+        const pathEl = doc.querySelector('path');
+        const d = pathEl ? pathEl.getAttribute('d') : null;
+        if (!d || !d.startsWith('M')) {
+            return { ok: false, reason: 'Invalid path d attribute: ' + d };
+        }
+        return { ok: true, hasSvgBtn: !!document.getElementById('btnLassoCopySvg') };
+    }""")
+    check("serializeSelectionToSvg produces valid, well-formed SVG vector path",
+          svg_export_ok.get('ok') and svg_export_ok.get('hasSvgBtn'), str(svg_export_ok))
 
     # -------------------------------------------------------------
     # T6: Radial Tool Menu

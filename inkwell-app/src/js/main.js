@@ -272,6 +272,16 @@ function registerCoreCommands() {
   });
 
   reg.register({
+    id: 'edit.copySvg',
+    title: 'Copy Selection as SVG (Obsidian / Vector)',
+    category: 'Edit',
+    shortcut: 'Ctrl+Alt+C',
+    execute: () => {
+      clipboard.copySelectionAsSvg();
+    },
+  });
+
+  reg.register({
     id: 'edit.cut',
     title: 'Cut Selection',
     category: 'Edit',
@@ -903,6 +913,7 @@ function bindAllUIEvents() {
 
   // Modal focus trapping and backdrop dismissal
   initModalFocusTrap();
+  initLassoSelectionPopover();
 }
 
 function updateTextSelectionPopover() {
@@ -949,6 +960,58 @@ function updateTextSelectionPopover() {
   } else {
     pop.classList.add('hidden');
   }
+}
+
+function updateLassoSelectionPopover() {
+  const pop = $('lassoSelectionPopover');
+  if (!pop) return;
+  const hasSelection = (state.selectedStrokes && state.selectedStrokes.some(s => !s.deleted)) ||
+                       (state.selectedImages && state.selectedImages.some(img => !img.deleted)) ||
+                       (state.selectedTextObjects && state.selectedTextObjects.some(t => !t.deleted));
+  if (state.activeTool === 'lasso' && hasSelection && _viewport) {
+    const bounds = overlays.getSelectionBounds(state, _viewport);
+    if (!bounds || !Number.isFinite(bounds.x0)) {
+      pop.classList.add('hidden');
+      return;
+    }
+    const midX = (bounds.x0 + bounds.x1) / 2;
+    const [sx, syTop] = _viewport.worldToScreen(midX, bounds.y0, 'left');
+    const [, syBottom] = _viewport.worldToScreen(midX, bounds.y1, 'left');
+
+    if (syBottom < 30 || syTop > window.innerHeight - 30) {
+      pop.classList.add('hidden');
+      return;
+    }
+
+    const clampedX = Math.max(160, Math.min(window.innerWidth - 160, sx));
+    if (syTop > 110) {
+      pop.style.left = clampedX + 'px';
+      pop.style.top = (syTop - 10) + 'px';
+      pop.style.transform = 'translate(-50%, -100%)';
+    } else {
+      pop.style.left = clampedX + 'px';
+      pop.style.top = (syBottom + 10) + 'px';
+      pop.style.transform = 'translate(-50%, 0)';
+    }
+    pop.classList.remove('hidden');
+  } else {
+    pop.classList.add('hidden');
+  }
+}
+
+function initLassoSelectionPopover() {
+  $('btnLassoCopy') && $('btnLassoCopy').addEventListener('click', () => {
+    commandsModule.commands.execute('edit.copy');
+  });
+  $('btnLassoCopySvg') && $('btnLassoCopySvg').addEventListener('click', () => {
+    commandsModule.commands.execute('edit.copySvg');
+  });
+  $('btnLassoDuplicate') && $('btnLassoDuplicate').addEventListener('click', () => {
+    commandsModule.commands.execute('edit.duplicate');
+  });
+  $('btnLassoDelete') && $('btnLassoDelete').addEventListener('click', () => {
+    commandsModule.commands.execute('edit.delete');
+  });
 }
 
 let _panState = {
@@ -1237,6 +1300,7 @@ function attachPointerHandlers(wetCanvas) {
       if (!state.isErasing) eraserTool.onEraserUp();
     } else if (tool === 'lasso') {
       lassoTool.onLassoUp(e, _viewport);
+      updateLassoSelectionPopover();
     } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler' || tool === 'line') {
       shapesTool.onShapeUp(e, _viewport);
     } else if (tool === 'laser') {
@@ -1535,6 +1599,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       compositor.scheduleRedrawAll();
       scrollbar.updateDocScrollbar(_viewport);
       updateTextSelectionPopover();
+      updateLassoSelectionPopover();
     });
     _viewport.attachListeners($('stage'));
   }
@@ -1583,6 +1648,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       const pop = $('textSelectionPopover');
       if (pop) pop.classList.add('hidden');
     }
+    updateLassoSelectionPopover();
     compositor.clearWet();
     compositor.redrawAll();
   });
@@ -1604,7 +1670,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       el.textContent = Math.round(payload.zoom * 100) + '%';
     }
   });
-  on('selectionChanged', updateTextSelectionPopover);
+  on('selectionChanged', () => {
+    updateTextSelectionPopover();
+    updateLassoSelectionPopover();
+  });
+  on('selectionCleared', () => {
+    updateTextSelectionPopover();
+    updateLassoSelectionPopover();
+  });
   on('documentChanged', evt => {
     toolbar.updateSaveStatusUI('dirty');
     if (state.autosaveDelayMs > 0 && state.currentDocPath && !state.isSaving) {

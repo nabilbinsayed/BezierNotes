@@ -54,6 +54,7 @@ export function showContextMenu(screenX, screenY, contextInfo = {}) {
 
       setItemEnabled('ctxMenuCut', hasSelection);
       setItemEnabled('ctxMenuCopy', canCopy);
+      setItemEnabled('ctxMenuCopySvg', hasSelection);
       setItemEnabled('ctxMenuDuplicate', hasSelection);
       setItemEnabled('ctxMenuDelete', hasSelection);
       setItemEnabled('ctxMenuPaste', canPaste);
@@ -78,6 +79,11 @@ export function initContextMenu() {
   $('ctxMenuCopy') && $('ctxMenuCopy').addEventListener('click', () => {
     hideContextMenu();
     commandsModule.commands.execute('edit.copy');
+  });
+
+  $('ctxMenuCopySvg') && $('ctxMenuCopySvg').addEventListener('click', () => {
+    hideContextMenu();
+    commandsModule.commands.execute('edit.copySvg');
   });
 
   $('ctxMenuPaste') && $('ctxMenuPaste').addEventListener('click', () => {
