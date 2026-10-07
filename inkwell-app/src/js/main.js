@@ -966,6 +966,9 @@ function attachPointerHandlers(wetCanvas) {
 
   function handleCanvasContextMenu(e) {
     e.preventDefault();
+    if (e.pointerType === 'pen' && (e.button === 2 || e.buttons === 2 || (e.buttons & 2) !== 0)) {
+      return;
+    }
     const { ptWorld, pane, screenPt } = localXY(e);
     const bounds = overlays.getSelectionBounds(state, _viewport);
     const hasSelection = !!((state.selectedStrokes && state.selectedStrokes.length) ||
@@ -1033,7 +1036,20 @@ function attachPointerHandlers(wetCanvas) {
   }
 
   wetCanvas.addEventListener('pointerdown', e => {
-    if (e.button === 2) {
+    if (e.pointerType === 'pen') {
+      state.isStylusActive = true;
+      state.lastStylusTime = Date.now();
+    } else if (e.pointerType === 'touch') {
+      const isPalm = state.isStylusActive || (Date.now() - (state.lastStylusTime || 0) < 1000);
+      if (isPalm) {
+        // Touch rejected while stylus is in active handwriting session
+        e.preventDefault();
+        return;
+      }
+    }
+
+    const isBarrelButton = (e.pointerType === 'pen' && (e.button === 2 || e.buttons === 2 || (e.buttons & 2) !== 0));
+    if (e.button === 2 && !isBarrelButton) {
       // Right-click: do not initiate drawing, erasing, or lasso drag
       return;
     }
@@ -1041,6 +1057,7 @@ function attachPointerHandlers(wetCanvas) {
     toolbar.hidePropPopover();
     try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
     const { ptWorld, pane, screenPt } = localXY(e);
+    state._lastPointerScreenPt = [e.clientX, e.clientY];
     const tool = state.activeTool || 'pen';
 
     if (tool !== 'textSelect' && tool !== 'textselect') {
@@ -1048,7 +1065,7 @@ function attachPointerHandlers(wetCanvas) {
       if (pop) pop.classList.add('hidden');
     }
 
-    const isStylusEraser = (e && (e.buttons === 32 || e.button === 5)) ||
+    const isStylusEraser = (e && (e.buttons === 32 || e.button === 5 || isBarrelButton)) ||
       (typeof toolManager.getLiveNativeTool === 'function' && toolManager.getLiveNativeTool() === 'eraser');
     const effectiveTool = isStylusEraser ? 'eraser' : tool;
 
@@ -1253,7 +1270,20 @@ function attachPointerHandlers(wetCanvas) {
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
 
+  window.cancelPendingTouchStroke = () => {
+    if (state.cur) {
+      penTool.onPenCancel();
+    }
+  };
+
+  window.addEventListener('pointermove', e => {
+    state._lastPointerScreenPt = [e.clientX, e.clientY];
+  });
+
   window.addEventListener('pointerup', e => {
+    if (e.pointerType === 'pen') {
+      state.isStylusActive = false;
+    }
     if (state.cur) {
       penTool.onPenUp(e, _viewport);
     }
@@ -1263,6 +1293,7 @@ function attachPointerHandlers(wetCanvas) {
   });
 
   window.addEventListener('pointercancel', () => {
+    state.isStylusActive = false;
     if (state.cur) {
       penTool.onPenCancel();
     }
@@ -1416,6 +1447,15 @@ function attachKeyboardShortcuts() {
       e.preventDefault();
       $('shortcutsModal') && $('shortcutsModal').classList.remove('hidden');
       return;
+    }
+
+    if (e.key === 'q' || e.key === 'Q') {
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const pt = state._lastPointerScreenPt || [window.innerWidth / 2, window.innerHeight / 2];
+        radialMenu.showRadialMenu(pt[0], pt[1]);
+        return;
+      }
     }
 
     if (e.key === ' ' || e.code === 'Space') {

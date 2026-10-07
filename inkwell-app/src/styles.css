@@ -1321,7 +1321,7 @@ html, body {
 }
 
 #tiles { z-index: 1; }
-#dry   { z-index: 2; }
+#dry   { z-index: 2; mix-blend-mode: multiply; }
 #wet   { z-index: 3; }
 
 /* Tool Canvas Distinct Precision Cursors */

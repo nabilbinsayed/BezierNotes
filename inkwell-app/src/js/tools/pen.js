@@ -83,10 +83,11 @@ export function onPenUp(e, viewport) {
         console.warn('[inkwell/pen] commitStroke WAL error:', err);
         warnDurability('Stroke may not persist: ' + err);
       });
+    compositor.clearWet();
+    compositor.drawCommittedStroke(stroke);
+  } else {
+    compositor.clearWet();
   }
-
-  compositor.clearWet();
-  compositor.redrawAll();
 }
 
 export function onPenCancel() {

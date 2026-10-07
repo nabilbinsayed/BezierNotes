@@ -284,7 +284,7 @@ export function handleSpaceKeyUp(e) {
   const didPan = state.spaceDidPan;
   const toolBefore = state.spaceToolBefore || 'pen';
 
-  if (duration < 250 && !didPan) {
+  if (duration < 350 && !didPan) {
     const target = (state.lastActiveTool && state.lastActiveTool !== toolBefore)
       ? state.lastActiveTool
       : (toolBefore === 'pen' ? 'eraser' : 'pen');
