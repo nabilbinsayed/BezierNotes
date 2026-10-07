@@ -32,6 +32,8 @@ pub struct PdfFile {
     next_id: u32,
     root_num: u32,
     trailer_id: Option<Vec<u8>>,
+    trailer_info: Option<Vec<u8>>,
+    trailer_encrypt: Option<Vec<u8>>,
     prev_xref: usize,
     pages: Vec<u32>,
     new_objs: BTreeMap<u32, Vec<u8>>,
@@ -57,12 +59,18 @@ impl PdfFile {
             .ok_or(Error::NoSize)?;
         let trailer_id =
             po::dict_get(d, tr, "/ID").map(|r| d[r.0..r.1].to_vec());
+        let trailer_info =
+            po::dict_get(d, tr, "/Info").map(|r| d[r.0..r.1].to_vec());
+        let trailer_encrypt =
+            po::dict_get(d, tr, "/Encrypt").map(|r| d[r.0..r.1].to_vec());
 
         let mut f = Self {
             base: bytes,
             next_id: size as u32,
             root_num,
             trailer_id,
+            trailer_info,
+            trailer_encrypt,
             prev_xref,
             pages: Vec::new(),
             new_objs: BTreeMap::new(),
@@ -476,14 +484,34 @@ impl PdfFile {
         let (w, h) = rgb.dimensions();
         let rgb_bytes = rgb.into_raw();
 
-        let img_xobject = self.add_stream(
-            &format!(
+        let smask_xobject = if dynamic_img.color().has_alpha() {
+            let rgba = dynamic_img.to_rgba8();
+            let alpha_bytes: Vec<u8> = rgba.pixels().map(|p| p[3]).collect();
+            let smask_id = self.add_stream(
+                &format!(
+                    "/Type /XObject /Subtype /Image /Width {w} /Height {h} \
+                     /ColorSpace /DeviceGray /BitsPerComponent 8"
+                ),
+                &alpha_bytes,
+                true,
+            );
+            Some(smask_id)
+        } else {
+            None
+        };
+
+        let img_dict = match smask_xobject {
+            Some(smask_id) => format!(
+                "/Type /XObject /Subtype /Image /Width {w} /Height {h} \
+                 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask {smask_id} 0 R"
+            ),
+            None => format!(
                 "/Type /XObject /Subtype /Image /Width {w} /Height {h} \
                  /ColorSpace /DeviceRGB /BitsPerComponent 8"
             ),
-            &rgb_bytes,
-            true,
-        );
+        };
+
+        let img_xobject = self.add_stream(&img_dict, &rgb_bytes, true);
 
         let annot_w = (x1 - x0).abs();
         let annot_h = (y1 - y0).abs();
@@ -500,11 +528,12 @@ impl PdfFile {
             false,
         );
 
-        let sid = if img.id.starts_with("img_") {
+        let raw_sid = if img.id.starts_with("img_") {
             img.id.clone()
         } else {
             format!("img_{}", img.id)
         };
+        let sid = escape_pdf_string(&raw_sid);
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /Stamp /F 4 /Rect [{}] \
@@ -574,16 +603,27 @@ impl PdfFile {
             false,
         );
 
-        let escaped_contents = escape_pdf_string(&text_obj.text);
-        let sid = if text_obj.id.starts_with("txt_") {
+        let escaped_contents = if text_obj.text.is_ascii() {
+            format!("({})", escape_pdf_string(&text_obj.text))
+        } else {
+            let mut hex_str = String::from("<FEFF");
+            for u in text_obj.text.encode_utf16() {
+                use std::fmt::Write;
+                let _ = write!(hex_str, "{:04X}", u);
+            }
+            hex_str.push('>');
+            hex_str
+        };
+        let raw_sid = if text_obj.id.starts_with("txt_") {
             text_obj.id.clone()
         } else {
             format!("txt_{}", text_obj.id)
         };
+        let sid = escape_pdf_string(&raw_sid);
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /FreeText /F 4 /Rect [{}] \
-                 /Contents ({escaped_contents}) \
+                 /Contents {escaped_contents} \
                  /DA ({font_tag} {:.2} Tf {:.3} {:.3} {:.3} rg) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
                 fmt_rect(&annot_rect),
@@ -600,14 +640,21 @@ impl PdfFile {
         let dict = self.obj_dict(page_num)?;
         let mut kept: Vec<u32> = Vec::new();
         if let Some(r) = po::dict_get(&self.base, dict, "/Annots") {
-            for n in refs_in_array(&self.base, r) {
-                let is_ours = self
-                    .obj_dict(n)
-                    .ok()
-                    .map(|d| po::dict_get(&self.base, d, "/Inkw_Sid").is_some())
-                    .unwrap_or(false);
-                if !is_ours {
-                    kept.push(n);
+            let annot_range = if let Some(ind_num) = po::as_ref_num(&self.base, r) {
+                po::find_object(&self.base, ind_num)
+            } else {
+                Some(r)
+            };
+            if let Some(ar) = annot_range {
+                for n in refs_in_array(&self.base, ar) {
+                    let is_ours = self
+                        .obj_dict(n)
+                        .ok()
+                        .map(|d| po::dict_get(&self.base, d, "/Inkw_Sid").is_some())
+                        .unwrap_or(false);
+                    if !is_ours {
+                        kept.push(n);
+                    }
                 }
             }
         }
@@ -624,17 +671,59 @@ impl PdfFile {
 
     fn rewrite_catalog(&mut self, ef: u32, fs: u32, hash: &[u8]) -> Result<()> {
         let dict = self.obj_dict(self.root_num)?;
+
+        // 1. Check if existing catalog has /Names and preserve other trees (e.g. /Dests, /JavaScript)
+        let names_section = if let Some(names_range) = po::dict_get(&self.base, dict, "/Names") {
+            let names_inner = if let Some(ind) = po::as_ref_num(&self.base, names_range) {
+                self.obj_dict(ind).ok()
+            } else {
+                po::dict_inner(&self.base, names_range.0).ok()
+            };
+            if let Some(inner) = names_inner {
+                let mut nb = po::dict_without(&self.base, inner, &["/EmbeddedFiles"]);
+                nb.extend_from_slice(
+                    format!("/EmbeddedFiles << /Names [(inkwell.doc) {fs} 0 R] >>\n").as_bytes(),
+                );
+                format!("/Names <<\n{}>>\n", String::from_utf8_lossy(&nb))
+            } else {
+                format!("/Names << /EmbeddedFiles << /Names [(inkwell.doc) {fs} 0 R] >> >>\n")
+            }
+        } else {
+            format!("/Names << /EmbeddedFiles << /Names [(inkwell.doc) {fs} 0 R] >> >>\n")
+        };
+
+        // 2. Check if existing catalog has /AF and preserve other attachments
+        let af_section = if let Some(af_range) = po::dict_get(&self.base, dict, "/AF") {
+            let af_inner = if let Some(ind) = po::as_ref_num(&self.base, af_range) {
+                po::find_object(&self.base, ind)
+            } else {
+                Some(af_range)
+            };
+            let mut af_refs = Vec::new();
+            if let Some(ar) = af_inner {
+                for n in refs_in_array(&self.base, ar) {
+                    if n != fs {
+                        af_refs.push(format!("{n} 0 R"));
+                    }
+                }
+            }
+            af_refs.push(format!("{fs} 0 R"));
+            format!("/AF [{}]\n", af_refs.join(" "))
+        } else {
+            format!("/AF [{fs} 0 R]\n")
+        };
+
         let mut body = b"<< ".to_vec();
         body.extend_from_slice(&po::dict_without(
             &self.base,
             dict,
             &["/Names", "/AF", "/Inkw_Doc", "/Inkw_Ver", "/Inkw_Hash"],
         ));
+        body.extend_from_slice(names_section.as_bytes());
+        body.extend_from_slice(af_section.as_bytes());
         body.extend_from_slice(
             format!(
-                "/Names << /EmbeddedFiles << /Names [(inkwell.doc) {fs} 0 R] >> >>\n\
-                 /AF [{fs} 0 R]\n\
-                 /Inkw_Doc {ef} 0 R\n\
+                "/Inkw_Doc {ef} 0 R\n\
                  /Inkw_Ver 1\n\
                  /Inkw_Hash <{}>\n>>",
                 hex(hash)
@@ -673,12 +762,48 @@ impl PdfFile {
             )
             .as_bytes(),
         );
-        if let Some(id) = &self.trailer_id {
-            buf.extend_from_slice(b" /ID ");
-            buf.extend_from_slice(id);
+        if let Some(info) = &self.trailer_info {
+            buf.extend_from_slice(b" /Info ");
+            buf.extend_from_slice(info);
         }
+        if let Some(enc) = &self.trailer_encrypt {
+            buf.extend_from_slice(b" /Encrypt ");
+            buf.extend_from_slice(enc);
+        }
+        let updated_id = update_trailer_id(self.trailer_id.as_deref());
+        buf.extend_from_slice(b" /ID ");
+        buf.extend_from_slice(&updated_id);
         buf.extend_from_slice(format!(" >>\nstartxref\n{xref_off}\n%%EOF\n").as_bytes());
         buf
+    }
+}
+
+fn update_trailer_id(orig: Option<&[u8]>) -> Vec<u8> {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut h1 = [0u8; 16];
+    h1[0..8].copy_from_slice(&(nanos as u64).to_le_bytes());
+    h1[8..16].copy_from_slice(&((nanos >> 64) as u64 ^ 0xa5a5_5a5a_3333_cccc_u64).to_be_bytes());
+    let id2 = hex(&h1);
+
+    if let Some(id_bytes) = orig {
+        let s = String::from_utf8_lossy(id_bytes);
+        let trimmed = s.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let inner = trimmed[1..trimmed.len() - 1].trim();
+            if let Some(first_tok) = inner.split_whitespace().next() {
+                return format!("[ {} <{}> ]", first_tok, id2).into_bytes();
+            }
+        }
+        id_bytes.to_vec()
+    } else {
+        let mut h0 = [0u8; 16];
+        h0[0..8].copy_from_slice(&(!nanos as u64).to_be_bytes());
+        h0[8..16].copy_from_slice(&((nanos >> 64) as u64 ^ 0x5a5a_a5a5_cccc_3333_u64).to_le_bytes());
+        format!("[ <{}> <{}> ]", hex(&h0), id2).into_bytes()
     }
 }
 
@@ -749,7 +874,16 @@ pub fn read_stream(d: &[u8], num: u32) -> Result<Vec<u8>> {
         ds += 1;
     }
     let len = po::dict_get(d, dict, "/Length")
-        .and_then(|r| po::as_int(d, r))
+        .and_then(|r| {
+            if let Some(n) = po::as_int(d, r) {
+                Some(n)
+            } else if let Some(ind) = po::as_ref_num(d, r) {
+                let (ind_bs, ind_be) = po::find_object(d, ind)?;
+                po::as_int(d, (ind_bs, ind_be))
+            } else {
+                None
+            }
+        })
         .ok_or(Error::Malformed("stream has no /Length"))? as usize;
     let de = (ds + len).min(d.len());
     let raw = &d[ds..de];

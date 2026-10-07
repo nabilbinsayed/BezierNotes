@@ -820,6 +820,98 @@ fn test_pdf_file_incremental_save_with_images_and_text() {
     }
 }
 
+#[test]
+fn test_transparent_image_smask_generation() {
+    let mut doc = Document::for_pdf(1);
+    let img_buf = image::RgbaImage::from_raw(2, 2, vec![
+        255, 0, 0, 128,
+        0, 255, 0, 64,
+        0, 0, 255, 200,
+        255, 255, 0, 100,
+    ]).unwrap();
+    let mut png_bytes = Vec::new();
+    img_buf.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let png_base64 = format!("data:image/png;base64,{b64}");
+
+    doc.sheets[0].images.push(inkwell_core::doc::ImageObject {
+        id: "img_trans_1".to_string(),
+        sheet: 0,
+        x: 50.0,
+        y: 50.0,
+        width: 100.0,
+        height: 100.0,
+        data_url: png_base64,
+    });
+
+    let mut f = PdfFile::open(fixture()).unwrap();
+    f.write_document(&doc, 64).unwrap();
+    let bytes = f.finish();
+
+    // Verify /SMask is present in the generated PDF
+    assert!(
+        inkwell_core::pdfobj::find(&bytes, b"/SMask", 0).is_some(),
+        "Transparent image must generate /SMask soft mask"
+    );
+    assert!(
+        inkwell_core::pdfobj::find(&bytes, b"/DeviceGray", 0).is_some(),
+        "Soft mask XObject must use /DeviceGray color space"
+    );
+}
+
+#[test]
+fn test_trailer_info_and_id_generation() {
+    let base = fixture();
+    let mut f = PdfFile::open(base.clone()).unwrap();
+    let doc = Document::for_pdf(1);
+    f.write_document(&doc, 64).unwrap();
+    let gen1_bytes = f.finish();
+
+    // Verify trailer has /Size, /Root, /Prev, and /ID
+    let tr_idx = inkwell_core::pdfobj::find(&gen1_bytes, b"trailer", 0).unwrap();
+    let trailer_str = String::from_utf8_lossy(&gen1_bytes[tr_idx..]);
+    assert!(trailer_str.contains("/Root"));
+    assert!(trailer_str.contains("/ID ["));
+
+    // Verify second generation ID is updated on next save
+    let mut f2 = PdfFile::open(gen1_bytes.clone()).unwrap();
+    f2.write_document(&doc, 64).unwrap();
+    let gen2_bytes = f2.finish();
+
+    let tr_idx2 = inkwell_core::pdfobj::find(&gen2_bytes, b"trailer", 0).unwrap();
+    let trailer_str2 = String::from_utf8_lossy(&gen2_bytes[tr_idx2..]);
+    assert!(trailer_str2.contains("/ID ["));
+}
+
+#[test]
+fn test_unicode_text_annot_utf16be() {
+    let mut doc = Document::for_pdf(1);
+    doc.sheets[0].text_objects.push(inkwell_core::doc::TextObject {
+        id: "txt_unicode_1".to_string(),
+        sheet: 0,
+        x: 100.0,
+        y: 100.0,
+        text: "InkWell 墨水池 Notes 🚀".to_string(),
+        font_size: 16.0,
+        color: "#141724".to_string(),
+        bold: false,
+        italic: false,
+        width: 150.0,
+        height: 40.0,
+    });
+
+    let mut f = PdfFile::open(fixture()).unwrap();
+    f.write_document(&doc, 64).unwrap();
+    let bytes = f.finish();
+
+    // Verify /Contents starts with UTF-16BE BOM <FEFF...
+    assert!(
+        inkwell_core::pdfobj::find(&bytes, b"/Contents <FEFF", 0).is_some(),
+        "Non-ASCII text annotation must encode /Contents as UTF-16BE hex string with BOM"
+    );
+}
+
 // ===========================================================================
 // helpers
 // ===========================================================================
