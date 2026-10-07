@@ -16,6 +16,7 @@ let _viewport = null;
 let _stageRect = null;
 
 let _redrawTilesPending = false;
+let _redrawTilesQueued = false;
 let _redrawAllPending = false;
 let _redrawTilesEpoch = 0;
 
@@ -131,13 +132,20 @@ export function resize() {
 }
 
 export function scheduleRedrawTiles() {
-  if (_redrawTilesPending) return;
+  if (_redrawTilesPending) {
+    _redrawTilesQueued = true;
+    return;
+  }
   _redrawTilesPending = true;
   requestAnimationFrame(async () => {
     try {
       await redrawTiles();
     } finally {
       _redrawTilesPending = false;
+      if (_redrawTilesQueued) {
+        _redrawTilesQueued = false;
+        scheduleRedrawTiles();
+      }
     }
   });
 }

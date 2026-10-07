@@ -86,7 +86,12 @@ export function findCachedTileFallback(sheetIdx, tr) {
 
 export async function fetchTile(page, rect, px) {
   const key = `${page}:${rect.join(',')}:${px}`;
-  if (tileCache.has(key)) return { key, data: tileCache.get(key) };
+  if (tileCache.has(key)) {
+    const val = tileCache.get(key);
+    tileCache.delete(key);
+    tileCache.set(key, val);
+    return { key, data: val };
+  }
   if (tilesPending.has(key)) return tilesPending.get(key);
 
   const task = (async () => {
@@ -143,7 +148,6 @@ export async function fetchTile(page, rect, px) {
       const msg = err && err.message ? err.message : String(err);
       console.error('[inkwell/tiles] fetchTile error:', msg);
       tileRenderError = msg;
-      tileCache.set(key, null);
       return null;
     } finally {
       tilesPending.delete(key);

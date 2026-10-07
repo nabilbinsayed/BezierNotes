@@ -627,69 +627,78 @@ pub async fn render_tile(
             cached_data
         } else {
             let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
-            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-                "PDFium is not available (pdfium.dll was not found at startup). \
-                 PDF tiles cannot be rendered.".to_string()
-            })?;
+            let cached_inside = {
+                let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+                cache_guard.get(page, target_w, target_h)
+            };
 
-            let mut doc = pdfium
-                .load_pdf_from_byte_slice(&arc_bytes, None)
-                .map_err(|e| format!("PDFium load error: {e:?}"))?;
+            if let Some(cached_data) = cached_inside {
+                cached_data
+            } else {
+                let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+                    "PDFium is not available (pdfium.dll was not found at startup). \
+                     PDF tiles cannot be rendered.".to_string()
+                })?;
 
-            let mut page_obj = doc.pages_mut().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+                let mut doc = pdfium
+                    .load_pdf_from_byte_slice(&arc_bytes, None)
+                    .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
-            // Filter out InkWell-authored annotations in-memory so they are not baked into
-            // the background bitmap tile (avoiding ghosting and preserving full interactive erasing/selection).
-            // Third-party annotations (from Okular, Acrobat, Drawboard, etc.) are preserved and rendered.
-            let annot_count = page_obj.annotations().len();
-            for i in (0..annot_count).rev() {
-                let is_inkwell = if let Ok(annot) = page_obj.annotations().get(i) {
-                    annot.creator().as_deref() == Some("Inkwell")
-                } else {
-                    false
-                };
-                if is_inkwell {
-                    let annots = page_obj.annotations_mut();
-                    if let Ok(annot) = annots.get(i) {
-                        let _ = annots.delete_annotation(annot);
+                let mut page_obj = doc.pages_mut().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+
+                // Filter out InkWell-authored annotations in-memory so they are not baked into
+                // the background bitmap tile (avoiding ghosting and preserving full interactive erasing/selection).
+                // Third-party annotations (from Okular, Acrobat, Drawboard, etc.) are preserved and rendered.
+                let annot_count = page_obj.annotations().len();
+                for i in (0..annot_count).rev() {
+                    let is_inkwell = if let Ok(annot) = page_obj.annotations().get(i) {
+                        annot.creator().as_deref() == Some("Inkwell")
+                    } else {
+                        false
+                    };
+                    if is_inkwell {
+                        let annots = page_obj.annotations_mut();
+                        if let Ok(annot) = annots.get(i) {
+                            let _ = annots.delete_annotation(annot);
+                        }
                     }
                 }
+
+                let actual_w = page_obj.width().value as f64;
+                let actual_h = page_obj.height().value as f64;
+                let target_w = ((actual_w * scale).round().max(1.0) as i32).min(4096);
+                let target_h = ((actual_h * scale).round().max(1.0) as i32).min(4096);
+
+                let config = PdfRenderConfig::new()
+                    .set_target_width(target_w)
+                    .set_maximum_height(target_h)
+                    .set_clear_color(PdfColor::WHITE)
+                    .render_annotations(true);
+
+                let bitmap = page_obj.render_with_config(&config).map_err(|e| {
+                    format!("PDFium failed to render page {page}: {e:?}")
+                })?;
+
+                let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
+                let bw = bitmap.width() as u32;
+                let bh = bitmap.height() as u32;
+
+                let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+                cache_guard.put(CachedPageBitmap {
+                    page,
+                    target_w,
+                    target_h,
+                    bgra_bytes: bgra.clone(),
+                    bitmap_w: bw,
+                    bitmap_h: bh,
+                });
+
+                if let Ok(mut dim_guard) = state.page_dimensions.lock() {
+                    dim_guard.insert(page, (actual_w, actual_h));
+                }
+
+                (bgra, bw, bh)
             }
-
-            let actual_w = page_obj.width().value as f64;
-            let actual_h = page_obj.height().value as f64;
-            let target_w = ((actual_w * scale).round().max(1.0) as i32).min(4096);
-            let target_h = ((actual_h * scale).round().max(1.0) as i32).min(4096);
-
-            let config = PdfRenderConfig::new()
-                .set_target_width(target_w)
-                .set_maximum_height(target_h)
-                .set_clear_color(PdfColor::WHITE)
-                .render_annotations(true);
-
-            let bitmap = page_obj.render_with_config(&config).map_err(|e| {
-                format!("PDFium failed to render page {page}: {e:?}")
-            })?;
-
-            let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
-            let bw = bitmap.width() as u32;
-            let bh = bitmap.height() as u32;
-
-            let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
-            cache_guard.put(CachedPageBitmap {
-                page,
-                target_w,
-                target_h,
-                bgra_bytes: bgra.clone(),
-                bitmap_w: bw,
-                bitmap_h: bh,
-            });
-
-            if let Ok(mut dim_guard) = state.page_dimensions.lock() {
-                dim_guard.insert(page, (actual_w, actual_h));
-            }
-
-            (bgra, bw, bh)
         }
     };
 
@@ -1065,7 +1074,7 @@ pub async fn save_pdf(
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
-    let orig_guard = state.original_pdf_bytes.lock().unwrap();
+    let mut orig_guard = state.original_pdf_bytes.lock().unwrap();
     let original_bytes = orig_guard.as_ref().ok_or("No original PDF loaded")?;
 
     let target_path = if let Some(p) = out_path_str {
@@ -1091,8 +1100,8 @@ pub async fn save_pdf(
     };
 
     // Open PDF and append vector ink layers, image annotations, and text annotations
-    let (_norm_bytes, mut pdf_file) = match PdfFile::open(original_bytes.to_vec()) {
-        Ok(f) => (original_bytes.to_vec(), f),
+    let (norm_bytes, mut pdf_file) = match PdfFile::open(original_bytes.to_vec()) {
+        Ok(f) => (None, f),
         Err(e) => {
             eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
             let pdfium_guard = state.pdfium.lock().unwrap();
@@ -1103,7 +1112,7 @@ pub async fn save_pdf(
                 .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
             let f = PdfFile::open(nb.clone())
                 .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
-            (nb, f)
+            (Some(nb), f)
         }
     };
 
@@ -1115,6 +1124,9 @@ pub async fn save_pdf(
         .map_err(|e| format!("Failed atomic save to {:?}: {e}", target_path))?;
 
     // Update in-memory state with the written PDF bytes
+    if let Some(nb) = norm_bytes {
+        *orig_guard = Some(Arc::new(nb));
+    }
     drop(orig_guard);
     drop(doc_guard);
     *state.pdf_bytes.lock().unwrap() = Some(Arc::new(final_bytes));

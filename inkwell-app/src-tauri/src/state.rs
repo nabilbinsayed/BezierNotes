@@ -23,6 +23,8 @@ pub struct CachedPageBitmap {
 pub struct PageBitmapLruCache {
     pub entries: Vec<CachedPageBitmap>,
     pub max_entries: usize,
+    pub current_bytes: usize,
+    pub max_bytes: usize,
 }
 
 impl PageBitmapLruCache {
@@ -30,6 +32,8 @@ impl PageBitmapLruCache {
         Self {
             entries: Vec::with_capacity(max_entries),
             max_entries,
+            current_bytes: 0,
+            max_bytes: 256 * 1024 * 1024, // 256 MB budget
         }
     }
 
@@ -46,15 +50,21 @@ impl PageBitmapLruCache {
 
     pub fn put(&mut self, entry: CachedPageBitmap) {
         if let Some(pos) = self.entries.iter().position(|c| c.page == entry.page && c.target_w == entry.target_w && c.target_h == entry.target_h) {
-            self.entries.remove(pos);
-        } else if self.entries.len() >= self.max_entries {
-            self.entries.remove(0); // Evict oldest
+            let old = self.entries.remove(pos);
+            self.current_bytes = self.current_bytes.saturating_sub(old.bgra_bytes.len());
         }
+        let new_bytes = entry.bgra_bytes.len();
+        while !self.entries.is_empty() && (self.current_bytes + new_bytes > self.max_bytes || self.entries.len() >= self.max_entries) {
+            let evicted = self.entries.remove(0);
+            self.current_bytes = self.current_bytes.saturating_sub(evicted.bgra_bytes.len());
+        }
+        self.current_bytes += new_bytes;
         self.entries.push(entry);
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.current_bytes = 0;
     }
 }
 
