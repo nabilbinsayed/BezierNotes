@@ -300,12 +300,26 @@ export function commitTransform({ initialStrokes = [], initialImages = [], initi
   if (recordHistory) {
     history.pushTransaction({
       type: 'transform_objects',
-      initialStrokes: initialStrokes.map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
-      initialImages: initialImages.map(img => ({ id: img.id, x: img.x, y: img.y, width: img.width, height: img.height })),
-      initialTextObjects: initialTextObjects.map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
-      finalStrokes: finalStrokes.map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
-      finalImages: finalImages.map(img => ({ id: img.id, x: img.x, y: img.y, width: img.width, height: img.height })),
-      finalTextObjects: finalTextObjects.map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
+      initialStrokes: initialStrokes.map(s => ({
+        id: s.id,
+        sheet: s.sheet ?? 0,
+        kind: s.kind || s.tool || 'pen',
+        rgb: s.rgb || [0, 0, 0],
+        base_width: s.base_width || s.baseWidth || 1.6,
+        points: s.points.map(p => ({ ...p })),
+      })),
+      initialImages: initialImages.map(img => ({ id: img.id, sheet: img.sheet ?? 0, x: img.x, y: img.y, width: img.width, height: img.height })),
+      initialTextObjects: initialTextObjects.map(t => ({ id: t.id, sheet: t.sheet ?? 0, x: t.x, y: t.y, fontSize: t.fontSize })),
+      finalStrokes: finalStrokes.map(s => ({
+        id: s.id,
+        sheet: s.sheet ?? 0,
+        kind: s.kind || s.tool || 'pen',
+        rgb: s.rgb || [0, 0, 0],
+        base_width: s.base_width || s.baseWidth || 1.6,
+        points: s.points.map(p => ({ ...p })),
+      })),
+      finalImages: finalImages.map(img => ({ id: img.id, sheet: img.sheet ?? 0, x: img.x, y: img.y, width: img.width, height: img.height })),
+      finalTextObjects: finalTextObjects.map(t => ({ id: t.id, sheet: t.sheet ?? 0, x: t.x, y: t.y, fontSize: t.fontSize })),
     });
   }
 
@@ -367,6 +381,12 @@ export function insertPageAtIndex(targetIndex, pageInfo) {
   if (!state.pageInfos) state.pageInfos = [];
   const insertIdx = Math.max(0, Math.min(state.pageInfos.length, targetIndex));
   state.pageInfos.splice(insertIdx, 0, pageInfo);
+  state.pageInfos.forEach((pi, idx) => {
+    if (pi) {
+      pi.page_index = idx;
+      pi.pageIndex = idx;
+    }
+  });
 
   // Shift sheet index of any existing strokes, images, text on or after insertIdx
   for (const s of state.strokes || []) {
@@ -460,6 +480,10 @@ export function performUndo() {
       const s = state.strokes.find(st => st.id === init.id);
       if (s) {
         s.points = init.points.map(p => ({ ...p }));
+        if (init.sheet !== undefined) s.sheet = init.sheet;
+        if (init.kind) s.kind = init.kind;
+        if (init.rgb) s.rgb = init.rgb;
+        if (init.base_width) s.base_width = init.base_width;
         s._cachedPath2D = null;
         if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
           s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
@@ -470,6 +494,7 @@ export function performUndo() {
     for (const init of (tx.initialImages || [])) {
       const img = (state.images || []).find(im => im.id === init.id);
       if (img) {
+        if (init.sheet !== undefined) img.sheet = init.sheet;
         img.x = init.x; img.y = init.y;
         img.width = init.width; img.height = init.height;
       }
@@ -477,6 +502,7 @@ export function performUndo() {
     for (const init of (tx.initialTextObjects || [])) {
       const t = (state.textObjects || []).find(txt => txt.id === init.id);
       if (t) {
+        if (init.sheet !== undefined) t.sheet = init.sheet;
         t.x = init.x; t.y = init.y;
         if (init.fontSize) t.fontSize = init.fontSize;
       }
@@ -521,6 +547,10 @@ export function performRedo() {
       const s = state.strokes.find(st => st.id === final.id);
       if (s) {
         s.points = final.points.map(p => ({ ...p }));
+        if (final.sheet !== undefined) s.sheet = final.sheet;
+        if (final.kind) s.kind = final.kind;
+        if (final.rgb) s.rgb = final.rgb;
+        if (final.base_width) s.base_width = final.base_width;
         s._cachedPath2D = null;
         if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
           s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
@@ -531,6 +561,7 @@ export function performRedo() {
     for (const final of (tx.finalImages || [])) {
       const img = (state.images || []).find(im => im.id === final.id);
       if (img) {
+        if (final.sheet !== undefined) img.sheet = final.sheet;
         img.x = final.x; img.y = final.y;
         img.width = final.width; img.height = final.height;
       }
@@ -538,6 +569,7 @@ export function performRedo() {
     for (const final of (tx.finalTextObjects || [])) {
       const t = (state.textObjects || []).find(txt => txt.id === final.id);
       if (t) {
+        if (final.sheet !== undefined) t.sheet = final.sheet;
         t.x = final.x; t.y = final.y;
         if (final.fontSize) t.fontSize = final.fontSize;
       }

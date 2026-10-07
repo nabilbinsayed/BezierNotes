@@ -5,6 +5,7 @@
 
 import { state, emit } from './state.js';
 import * as documentOps from './document.js';
+import * as history from './history.js';
 import * as ipc from './ipc.js';
 
 let _clipboard = null;
@@ -319,13 +320,11 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
 
   // Record batch add in history
   if (newStrokes.length || newImages.length || newTexts.length) {
-    import('./history.js').then(history => {
-      history.pushTransaction({
-        type: 'add_objects',
-        strokes: newStrokes,
-        images: newImages,
-        textObjects: newTexts,
-      });
+    history.pushTransaction({
+      type: 'add_objects',
+      strokes: newStrokes,
+      images: newImages,
+      textObjects: newTexts,
     });
   }
 

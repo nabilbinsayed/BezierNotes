@@ -797,6 +797,7 @@ pub async fn commit_stroke(
         samples: pts,
     };
 
+    doc.remove_stroke(stroke_id);
     doc.push_stroke(sheet, stroke.clone());
 
     // Offload WAL append to background worker thread channel.

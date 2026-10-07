@@ -99,9 +99,9 @@ export function onPenCancel() {
 
 function consumeSample(e, ptWorld, pane, viewport, shouldRender = true, rawEvent = e) {
   if (!state.cur || !viewport) return;
-  const pageCoord = viewport.worldToPage(ptWorld[0], ptWorld[1]);
-  const px = pageCoord.px;
-  const py = pageCoord.py;
+  const pl = viewport.getPageLayout(state.cur.sheet || 0);
+  const px = pl ? (ptWorld[0] - pl.x) : ptWorld[0];
+  const py = pl ? (ptWorld[1] - pl.y) : ptWorld[1];
 
   state.penWarmup = (state.penWarmup || 0) + 1;
   let p = typeof window.resolvePressure === 'function'

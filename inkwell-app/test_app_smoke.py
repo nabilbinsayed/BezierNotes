@@ -980,6 +980,64 @@ with sync_playwright() as pw:
           tr_redo_txt and tr_redo_txt.get("op") == "upsert" and tr_redo_txt.get("text", {}).get("x") == 120,
           f"img={tr_redo_img} txt={tr_redo_txt}")
 
+    # 5. Batch Delete Forward Mutation
+    pg.evaluate("""(() => {
+        window.__walImageMutations = [];
+        window.__walTextMutations = [];
+        window.documentOps.deleteObjectsBatch({
+            strokes: [],
+            images: [{ id: 'img_fwd_del_1', sheet: 0, x: 50, y: 50, width: 40, height: 40 }],
+            textObjects: [{ id: 'txt_fwd_del_1', sheet: 0, x: 60, y: 60, text: 'fwd item' }]
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    fwd_del_img = pg.evaluate("window.__walImageMutations ? window.__walImageMutations.slice(-1)[0] : null")
+    fwd_del_txt = pg.evaluate("window.__walTextMutations ? window.__walTextMutations.slice(-1)[0] : null")
+    check("forward batch deletion journals delete mutations to WAL IPC",
+          fwd_del_img and fwd_del_img.get("op") == "delete" and fwd_del_img.get("imageId") == "img_fwd_del_1" and
+          fwd_del_txt and fwd_del_txt.get("op") == "delete" and fwd_del_txt.get("textId") == "txt_fwd_del_1",
+          f"img={fwd_del_img} txt={fwd_del_txt}")
+
+    # 6. Transform Stroke Metadata Preservation
+    pg.evaluate("""(() => {
+        window.__committedStrokes = [];
+        const originalStroke = {
+            id: 'st_tr_meta_1',
+            sheet: 1,
+            kind: 'highlighter',
+            rgb: [1.0, 0.9, 0.2],
+            base_width: 8.0,
+            points: [{ x: 10, y: 10, p: 0.5 }, { x: 20, y: 20, p: 0.5 }]
+        };
+        window.state.strokes.push(originalStroke);
+        window.documentOps.commitTransform({
+            initialStrokes: [originalStroke],
+            initialImages: [],
+            initialTextObjects: [],
+            finalStrokes: [{
+                ...originalStroke,
+                points: [{ x: 50, y: 50, p: 0.5 }, { x: 60, y: 60, p: 0.5 }]
+            }],
+            finalImages: [],
+            finalTextObjects: []
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    # Undo transform on stroke
+    pg.evaluate("window.documentOps.performUndo()")
+    pg.wait_for_timeout(60)
+
+    tr_meta_stroke = pg.evaluate("""(() => {
+        const s = window.state.strokes.find(st => st.id === 'st_tr_meta_1');
+        return s ? { sheet: s.sheet, kind: s.kind, rgb: s.rgb, base_width: s.base_width, p0: s.points[0] } : null;
+    })()""")
+    check("transform undo cleanly restores stroke metadata (sheet, kind, rgb, base_width)",
+          tr_meta_stroke and tr_meta_stroke["sheet"] == 1 and tr_meta_stroke["kind"] == "highlighter" and
+          abs(tr_meta_stroke["base_width"] - 8.0) < 0.01 and tr_meta_stroke["p0"]["x"] == 10,
+          f"stroke={tr_meta_stroke}")
+
     # -------------------------------------------------------------
     # T13: Document Text Layer Isolation & Page Shift Cache
     # -------------------------------------------------------------

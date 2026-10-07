@@ -25,6 +25,10 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
     state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
       id: s.id,
       stroke: s,
+      sheet: s.sheet ?? 0,
+      kind: s.kind || s.tool || 'pen',
+      rgb: s.rgb || [0, 0, 0],
+      base_width: s.base_width || s.baseWidth || 1.6,
       points: (s.points || s._pts || []).map(p => ({ ...p })),
       bbox: s.bbox ? [...s.bbox] : null,
     }));
@@ -79,6 +83,10 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
       state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
         id: s.id,
         stroke: s,
+        sheet: s.sheet ?? 0,
+        kind: s.kind || s.tool || 'pen',
+        rgb: s.rgb || [0, 0, 0],
+        base_width: s.base_width || s.baseWidth || 1.6,
         points: (s.points || s._pts || []).map(p => ({ ...p })),
         bbox: s.bbox ? [...s.bbox] : null,
       }));
@@ -335,7 +343,14 @@ export function onLassoUp(e, viewport) {
       initialStrokes: state.transformInitialStrokes || [],
       initialImages: state.transformInitialImages || [],
       initialTextObjects: state.transformInitialTextObjects || [],
-      finalStrokes: (state.selectedStrokes || []).map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
+      finalStrokes: (state.selectedStrokes || []).map(s => ({
+        id: s.id,
+        sheet: s.sheet ?? 0,
+        kind: s.kind || s.tool || 'pen',
+        rgb: s.rgb || [0, 0, 0],
+        base_width: s.base_width || s.baseWidth || 1.6,
+        points: s.points.map(p => ({ ...p }))
+      })),
       finalImages: (state.selectedImages || []).map(img => ({
         id: img.id,
         sheet: img.sheet || 0,

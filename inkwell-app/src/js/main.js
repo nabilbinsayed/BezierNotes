@@ -152,7 +152,7 @@ function prepareAllImagesForSave() {
   const templateImages = (state.pageInfos || [])
     .map((pi, idx) => (pi && pi.template && pi.template !== 'blank') ? templates.renderPageTemplateBackgroundToDataUrl(pi, idx) : null)
     .filter(Boolean);
-  const nonDeletedImages = (state.images || []).filter(img => !img.deleted);
+  const nonDeletedImages = (state.images || []).filter(img => !img.deleted && (!img.id || !img.id.startsWith('template_bg_')));
   return [...templateImages, ...nonDeletedImages];
 }
 
@@ -186,14 +186,21 @@ function registerCoreCommands() {
         state.isSaving = true;
         toolbar.updateSaveStatusUI('saving');
         const imagesToSave = prepareAllImagesForSave();
-        await ipc.savePdf(state.currentDocPath, state.strokes, imagesToSave, state.textObjects);
-        state.isDirty = false;
-        toolbar.updateSaveStatusUI('saved');
-        toast.showToast('Document saved successfully', 'success');
+        const savedPath = await ipc.savePdf(state.currentDocPath, state.strokes, imagesToSave, state.textObjects);
+        if (savedPath) {
+          state.currentDocPath = savedPath;
+          state.currentDocTitle = savedPath.split(/[\\/]/).pop();
+          state.isDirty = false;
+          toolbar.updateSaveStatusUI('saved');
+          toast.showToast('Document saved successfully', 'success');
+          return true;
+        }
+        return false;
       } catch (e) {
         toolbar.updateSaveStatusUI('dirty');
         const msg = friendlyError(e);
-        if (msg) toast.showToast('Save failed: ' + msg, 'error');
+        if (msg && msg !== 'CANCELLED') toast.showToast('Save failed: ' + msg, 'error');
+        return false;
       } finally {
         state.isSaving = false;
       }
@@ -1653,7 +1660,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.textObj) ipc.journalTextMutation('upsert', data.textObj);
     } else if (type === 'undo_delete_objects' || type === 'redo_add_objects') {
       for (const s of (data.strokes || [])) {
-        if (s) ipc.commitStroke(s.sheet, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
+        if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
       }
       for (const img of (data.images || [])) {
         if (img) ipc.journalImageMutation('upsert', img);
@@ -1661,7 +1668,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       for (const t of (data.textObjects || [])) {
         if (t) ipc.journalTextMutation('upsert', t);
       }
-    } else if (type === 'redo_delete_objects' || type === 'undo_add_objects') {
+    } else if (type === 'delete_objects' || type === 'redo_delete_objects' || type === 'undo_add_objects') {
       for (const s of (data.strokes || [])) {
         if (s && s.id) ipc.deleteStroke(s.id);
       }
@@ -1671,6 +1678,16 @@ window.addEventListener('DOMContentLoaded', async () => {
       for (const t of (data.textObjects || [])) {
         if (t) ipc.journalTextMutation('delete', t);
       }
+    } else if (type === 'transform_objects') {
+      for (const s of (data.strokes || [])) {
+        if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
+      }
+      for (const img of (data.images || [])) {
+        if (img) ipc.journalImageMutation('upsert', img);
+      }
+      for (const t of (data.textObjects || [])) {
+        if (t) ipc.journalTextMutation('upsert', t);
+      }
     } else if (type === 'undo_transform_objects' || type === 'redo_transform_objects') {
       const isUndo = type === 'undo_transform_objects';
       const strokeList = isUndo ? data.initialStrokes : data.finalStrokes;
@@ -1678,7 +1695,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       const textList = isUndo ? data.initialTextObjects : data.finalTextObjects;
 
       for (const s of (strokeList || [])) {
-        if (s) ipc.commitStroke(s.sheet || 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
+        if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
       }
       for (const img of (imageList || [])) {
         if (img) ipc.journalImageMutation('upsert', img);
@@ -1693,9 +1710,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (typeof window !== 'undefined' && window.__TAURI__?.event?.listen) {
     window.__TAURI__.event.listen('app-save-and-close', async () => {
       try {
-        await commandsModule.commands.execute('file.save');
-        if (window.forceCloseWindow) await window.forceCloseWindow();
-        else window.close();
+        const saved = await commandsModule.commands.execute('file.save');
+        if (saved) {
+          if (window.forceCloseWindow) await window.forceCloseWindow();
+          else window.close();
+        }
       } catch (e) {
         const msg = friendlyError(e);
         if (msg) toast.showToast('Could not save on exit: ' + msg, 'error');

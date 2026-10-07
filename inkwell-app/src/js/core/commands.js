@@ -46,8 +46,8 @@ class CommandRegistry {
       return false;
     }
     try {
-      cmd.execute(...args);
-      return true;
+      const res = cmd.execute(...args);
+      return res !== undefined ? res : true;
     } catch (err) {
       console.error(`[inkwell/commands] Error executing command "${id}":`, err);
       return false;
