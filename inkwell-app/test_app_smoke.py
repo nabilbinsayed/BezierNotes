@@ -546,7 +546,7 @@ with sync_playwright() as pw:
     # T9: Navigation Rail & Drawer Panels
     # -------------------------------------------------------------
     print("\n=== T9  Navigation Rail & Drawer Panels ===", flush=True)
-    drawers = ['btnRailThumbnails', 'btnRailOutline', 'btnRailSearch', 'btnRailDocInfo']
+    drawers = ['btnRailThumbnails', 'btnRailOutline', 'btnRailSearch', 'btnRailBookmarks', 'btnRailDocInfo']
     for d in drawers:
         btn = pg.locator(f"#{d}")
         check(f"rail button #{d} exists", btn.count() == 1)
@@ -580,6 +580,39 @@ with sync_playwright() as pw:
           updated_thumbs == updated_pages and not insert_error,
           f"thumbs={updated_thumbs} pages={updated_pages} insertError={insert_error}")
     check("page insertion runs with zero console errors", not errors, str(errors[:2]))
+
+    # Plan 064: Visual Thumbnails & Action Buttons Verification
+    thumb_actions_ok = pg.evaluate("""() => {
+        const cards = document.querySelectorAll('#thumbnailGrid .thumb-card');
+        if (!cards.length) return false;
+        return Array.from(cards).every(card => {
+            const hasAct = !!card.querySelector('.thumb-card-actions');
+            const hasDup = !!card.querySelector('.btn-thumb-duplicate');
+            const hasDel = !!card.querySelector('.btn-thumb-del');
+            const hasCanvas = !!card.querySelector('canvas.thumb-canvas');
+            const isDraggable = card.getAttribute('draggable') === 'true';
+            return hasAct && hasDup && hasDel && hasCanvas && isDraggable;
+        });
+    }""")
+    check("thumbnail cards render preview canvases, action buttons, and drag attributes", thumb_actions_ok)
+
+    # Plan 064: Bookmarks Workflow Verification
+    pg.locator("#btnRailBookmarks").click(force=True)
+    pg.wait_for_timeout(60)
+    pg.locator("#btnAddBookmark").click(force=True)
+    pg.wait_for_timeout(60)
+    bm_count_after_add = pg.locator("#bookmarksList .bookmark-card").count()
+    check("clicking #btnAddBookmark adds bookmark card to bookmarksList", bm_count_after_add >= 1, f"count={bm_count_after_add}")
+
+    # Remove bookmark
+    pg.locator("#bookmarksList .bookmark-delete-btn").first.click(force=True)
+    pg.wait_for_timeout(60)
+    bm_count_after_del = pg.locator("#bookmarksList .bookmark-card").count()
+    check("clicking .bookmark-delete-btn removes bookmark from bookmarksList", bm_count_after_del == bm_count_after_add - 1, f"count={bm_count_after_del}")
+
+    # Return to thumbnails
+    pg.locator("#btnRailThumbnails").click(force=True)
+    pg.wait_for_timeout(60)
 
     # -------------------------------------------------------------
     # T10: Synthetic Pen Input Pipeline

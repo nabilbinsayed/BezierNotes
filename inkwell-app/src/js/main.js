@@ -1542,7 +1542,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   compositor.initCompositor({ tilesCanvas, dryCanvas, wetCanvas, viewport: _viewport });
   compositor.resize();
 
-  drawers.setGoToPageCallback((pageIdx, pane) => navigation.goToPage(pageIdx, pane, _viewport));
+  drawers.setGoToPageCallback((pageIdx, pane) => {
+    if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+    navigation.goToPage(pageIdx, pane, _viewport);
+  });
   drawers.initDrawers();
 
   registerCoreCommands();

@@ -429,6 +429,187 @@ export function insertPage(afterIndex, pageInfo) {
   return insertPageAtIndex(afterIndex + 1, pageInfo);
 }
 
+export function duplicatePageAtIndex(sourceIndex, newPageInfo) {
+  if (!state.pageInfos || sourceIndex < 0 || sourceIndex >= state.pageInfos.length) return -1;
+  const targetIndex = sourceIndex + 1;
+  const srcPi = state.pageInfos[sourceIndex] || {};
+  const pageInfo = newPageInfo ? {
+    page_index: targetIndex,
+    pageIndex: targetIndex,
+    width_pt: newPageInfo.width_pt || srcPi.width_pt || 595.0,
+    height_pt: newPageInfo.height_pt || srcPi.height_pt || 842.0,
+    template: srcPi.template || 'blank',
+  } : {
+    page_index: targetIndex,
+    pageIndex: targetIndex,
+    width_pt: srcPi.width_pt || 595.0,
+    height_pt: srcPi.height_pt || 842.0,
+    template: srcPi.template || 'blank',
+  };
+
+  state.pageInfos.splice(targetIndex, 0, pageInfo);
+  state.pageInfos.forEach((pi, idx) => {
+    if (pi) {
+      pi.page_index = idx;
+      pi.pageIndex = idx;
+    }
+  });
+
+  // Shift existing objects on or after targetIndex
+  for (const s of state.strokes || []) {
+    if (s.sheet >= targetIndex) s.sheet += 1;
+  }
+  for (const img of state.images || []) {
+    if (img.sheet >= targetIndex) img.sheet += 1;
+  }
+  for (const t of state.textObjects || []) {
+    if (t.sheet >= targetIndex) t.sheet += 1;
+  }
+  for (const bm of state.bookmarks || []) {
+    if (bm.page >= targetIndex) bm.page += 1;
+  }
+
+  // Clone strokes from sourceIndex
+  const clonedStrokes = [];
+  for (const s of state.strokes || []) {
+    if (s.sheet === sourceIndex && !s.deleted) {
+      const clone = {
+        ...s,
+        id: 'stk_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        sheet: targetIndex,
+        points: (s.points || []).map(p => ({ ...p })),
+        _cachedPath2D: null,
+      };
+      clonedStrokes.push(clone);
+    }
+  }
+  state.strokes.push(...clonedStrokes);
+
+  // Clone images from sourceIndex
+  const clonedImages = [];
+  for (const img of state.images || []) {
+    if (img.sheet === sourceIndex && !img.deleted) {
+      const clone = {
+        ...img,
+        id: 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        sheet: targetIndex,
+      };
+      if (clone.dataUrl) ensureImageElement(clone);
+      clonedImages.push(clone);
+    }
+  }
+  state.images.push(...clonedImages);
+
+  // Clone textObjects from sourceIndex
+  const clonedTexts = [];
+  for (const t of state.textObjects || []) {
+    if (t.sheet === sourceIndex && !t.deleted) {
+      const clone = {
+        ...t,
+        id: 'txt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        sheet: targetIndex,
+      };
+      clonedTexts.push(clone);
+    }
+  }
+  state.textObjects.push(...clonedTexts);
+
+  rebuildStrokesBySheet();
+  notifyMutation('duplicate_page', { sourceIndex, targetIndex, pageInfo });
+  return targetIndex;
+}
+
+export function deletePageAtIndex(pageIndex) {
+  if (!state.pageInfos || state.pageInfos.length <= 1) return false;
+  if (pageIndex < 0 || pageIndex >= state.pageInfos.length) return false;
+
+  state.pageInfos.splice(pageIndex, 1);
+  state.pageInfos.forEach((pi, idx) => {
+    if (pi) {
+      pi.page_index = idx;
+      pi.pageIndex = idx;
+    }
+  });
+
+  // Remove objects on deleted sheet and decrement sheet index for succeeding pages
+  state.strokes = (state.strokes || []).filter(s => {
+    if (s.sheet === pageIndex) return false;
+    if (s.sheet > pageIndex) s.sheet -= 1;
+    return true;
+  });
+
+  state.images = (state.images || []).filter(img => {
+    if (img.sheet === pageIndex) return false;
+    if (img.sheet > pageIndex) img.sheet -= 1;
+    return true;
+  });
+
+  state.textObjects = (state.textObjects || []).filter(t => {
+    if (t.sheet === pageIndex) return false;
+    if (t.sheet > pageIndex) t.sheet -= 1;
+    return true;
+  });
+
+  state.bookmarks = (state.bookmarks || []).filter(bm => {
+    if (bm.page === pageIndex) return false;
+    if (bm.page > pageIndex) bm.page -= 1;
+    return true;
+  });
+
+  state.pageTextData = {};
+  state.pageTextSpans = {};
+
+  rebuildStrokesBySheet();
+  notifyMutation('delete_page', { pageIndex });
+  return true;
+}
+
+export function reorderPageAtIndex(fromIndex, toIndex) {
+  if (!state.pageInfos || fromIndex < 0 || fromIndex >= state.pageInfos.length ||
+      toIndex < 0 || toIndex >= state.pageInfos.length || fromIndex === toIndex) {
+    return false;
+  }
+
+  const [movedPage] = state.pageInfos.splice(fromIndex, 1);
+  state.pageInfos.splice(toIndex, 0, movedPage);
+  state.pageInfos.forEach((pi, idx) => {
+    if (pi) {
+      pi.page_index = idx;
+      pi.pageIndex = idx;
+    }
+  });
+
+  function mapIndex(idx) {
+    if (idx === fromIndex) return toIndex;
+    if (fromIndex < toIndex) {
+      if (idx > fromIndex && idx <= toIndex) return idx - 1;
+    } else {
+      if (idx >= toIndex && idx < fromIndex) return idx + 1;
+    }
+    return idx;
+  }
+
+  for (const s of state.strokes || []) {
+    s.sheet = mapIndex(s.sheet);
+  }
+  for (const img of state.images || []) {
+    img.sheet = mapIndex(img.sheet);
+  }
+  for (const t of state.textObjects || []) {
+    t.sheet = mapIndex(t.sheet);
+  }
+  for (const bm of state.bookmarks || []) {
+    bm.page = mapIndex(bm.page);
+  }
+
+  state.pageTextData = {};
+  state.pageTextSpans = {};
+
+  rebuildStrokesBySheet();
+  notifyMutation('reorder_page', { fromIndex, toIndex });
+  return true;
+}
+
 // ---- Undo / Redo Domain Dispatches ----
 
 export function performUndo() {
