@@ -61,6 +61,8 @@ pub struct Sheet {
     pub images: Vec<ImageObject>,
     #[serde(default)]
     pub text_objects: Vec<TextObject>,
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 impl Sheet {
@@ -70,6 +72,7 @@ impl Sheet {
             layers: vec![Layer::new("Ink")],
             images: Vec::new(),
             text_objects: Vec::new(),
+            template: None,
         }
     }
     pub fn blank() -> Self {
@@ -78,6 +81,7 @@ impl Sheet {
             layers: vec![Layer::new("Ink")],
             images: Vec::new(),
             text_objects: Vec::new(),
+            template: None,
         }
     }
     pub fn strokes(&self) -> impl Iterator<Item = &Stroke> {

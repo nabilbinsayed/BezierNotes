@@ -912,6 +912,109 @@ fn test_unicode_text_annot_utf16be() {
     );
 }
 
+#[test]
+fn test_annotation_layering_order_preserves_ink_visibility() {
+    let mut doc = Document::for_pdf(1);
+
+    let png_base64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string();
+
+    // 1. Template background image
+    doc.sheets[0].images.push(inkwell_core::doc::ImageObject {
+        id: "template_bg_0_dark".to_string(),
+        sheet: 0,
+        x: 0.0,
+        y: 0.0,
+        width: 595.0,
+        height: 842.0,
+        data_url: png_base64.clone(),
+    });
+
+    // 2. User embedded image
+    doc.sheets[0].images.push(inkwell_core::doc::ImageObject {
+        id: "user_diagram_1".to_string(),
+        sheet: 0,
+        x: 100.0,
+        y: 100.0,
+        width: 200.0,
+        height: 200.0,
+        data_url: png_base64,
+    });
+
+    // 3. Ink stroke (drawn on top of template and image)
+    doc.sheets[0].layers[0].strokes.push(Stroke {
+        id: 0x9999,
+        kind: ToolKind::Pen,
+        rgb: [1.0, 1.0, 1.0],
+        brush: Brush { base_width: 2.0, gamma: 1.0, min_ratio: 0.2 },
+        samples: vec![
+            Sample { x: 120.0, y: 120.0, p: 0.5, t: 0.0 },
+            Sample { x: 135.0, y: 135.0, p: 0.5, t: 0.05 },
+            Sample { x: 150.0, y: 150.0, p: 0.5, t: 0.10 },
+            Sample { x: 165.0, y: 165.0, p: 0.5, t: 0.15 },
+            Sample { x: 180.0, y: 180.0, p: 0.5, t: 0.20 },
+        ],
+    });
+
+    // 4. Text annotation
+    doc.sheets[0].text_objects.push(inkwell_core::doc::TextObject {
+        id: "txt_label_1".to_string(),
+        sheet: 0,
+        x: 150.0,
+        y: 150.0,
+        text: "Important Figure".to_string(),
+        font_size: 14.0,
+        color: "#ffffff".to_string(),
+        bold: true,
+        italic: false,
+        width: 120.0,
+        height: 30.0,
+    });
+
+    let mut f = PdfFile::open(fixture()).unwrap();
+    f.write_document(&doc, 64).unwrap();
+    let bytes = f.finish();
+
+    // Extract the page /Annots array
+    let annots_idx = inkwell_core::pdfobj::find(&bytes, b"/Annots [", 0).expect("Annots array present");
+    let end_idx = inkwell_core::pdfobj::find(&bytes, b"]", annots_idx).expect("Annots array closed");
+    let annots_slice = String::from_utf8_lossy(&bytes[annots_idx..end_idx]);
+    let toks: Vec<&str> = annots_slice
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c| c == '[' || c == ']' || c == '/'))
+        .filter(|t| !t.is_empty() && *t != "Annots")
+        .collect();
+    let mut annot_refs = Vec::new();
+    let mut i = 0;
+    while i + 2 < toks.len() {
+        if toks[i + 2] == "R" {
+            if let Ok(n) = toks[i].parse::<u32>() {
+                annot_refs.push(n);
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+
+    let get_obj_content = |num: u32| -> String {
+        let (start, _) = inkwell_core::pdfobj::find_object(&bytes, num).unwrap();
+        let end = inkwell_core::pdfobj::skip_value(&bytes, start);
+        String::from_utf8_lossy(&bytes[start..end]).to_string()
+    };
+
+    assert_eq!(annot_refs.len(), 4, "Must have exactly 4 annotations: template, image, stroke, text");
+
+    let a0 = get_obj_content(annot_refs[0]);
+    let a1 = get_obj_content(annot_refs[1]);
+    let a2 = get_obj_content(annot_refs[2]);
+    let a3 = get_obj_content(annot_refs[3]);
+
+    assert!(a0.contains("template_bg_0_dark"), "0th annotation must be template background, got: {a0}");
+    assert!(a1.contains("user_diagram_1"), "1st annotation must be user image, got: {a1}");
+    assert!(a2.contains("/Subtype /Ink"), "2nd annotation must be vector ink stroke (drawn on top of images), got: {a2}");
+    assert!(a3.contains("/Subtype /FreeText"), "3rd annotation must be text annotation, got: {a3}");
+}
+
 // ===========================================================================
 // helpers
 // ===========================================================================

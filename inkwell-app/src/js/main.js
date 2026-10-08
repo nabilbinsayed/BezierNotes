@@ -152,7 +152,7 @@ function prepareAllImagesForSave() {
   const templateImages = (state.pageInfos || [])
     .map((pi, idx) => (pi && pi.template && pi.template !== 'blank') ? templates.renderPageTemplateBackgroundToDataUrl(pi, idx) : null)
     .filter(Boolean);
-  const nonDeletedImages = (state.images || []).filter(img => !img.deleted && (!img.id || !img.id.startsWith('template_bg_')));
+  const nonDeletedImages = (state.images || []).filter(img => !img.deleted && (!img.id || (!img.id.startsWith('template_bg_') && !img.id.startsWith('img_template_bg_'))));
   return [...templateImages, ...nonDeletedImages];
 }
 

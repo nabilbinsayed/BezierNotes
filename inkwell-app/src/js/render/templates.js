@@ -141,8 +141,9 @@ export function renderPageTemplateBackgroundToDataUrl(pi, sheetIdx) {
 
   drawPageTemplateGuidelines(ctx, pi ? pi.template : 'blank', width, height);
 
+  const tmpl = (pi && pi.template) ? pi.template : 'blank';
   return {
-    id: `template_bg_${sheetIdx}`,
+    id: `template_bg_${sheetIdx}_${tmpl}`,
     sheet: sheetIdx,
     x: 0,
     y: 0,

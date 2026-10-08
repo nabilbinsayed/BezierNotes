@@ -249,16 +249,33 @@ impl PdfFile {
 
             let strokes: Vec<&Stroke> = sheet.strokes().collect();
             let mut annots = Vec::new();
+
+            // 1. Page template backgrounds (must be rendered first at the bottom of the annotation stack)
+            for img in &sheet.images {
+                if img.id.starts_with("template_bg_") || img.id.starts_with("img_template_bg_") {
+                    if let Some(a) = self.emit_image_annot(img, pbox) {
+                        annots.push(a);
+                    }
+                }
+            }
+
+            // 2. User embedded images (below strokes so ink markup over figures remains visible)
+            for img in &sheet.images {
+                if !img.id.starts_with("template_bg_") && !img.id.starts_with("img_template_bg_") {
+                    if let Some(a) = self.emit_image_annot(img, pbox) {
+                        annots.push(a);
+                    }
+                }
+            }
+
+            // 3. Vector ink strokes (on top of background templates and user images)
             for chunk in strokes.chunks(group) {
                 if let Some(a) = self.emit_group(chunk, pbox) {
                     annots.push(a);
                 }
             }
-            for img in &sheet.images {
-                if let Some(a) = self.emit_image_annot(img, pbox) {
-                    annots.push(a);
-                }
-            }
+
+            // 4. Text objects / annotations (top layer)
             for txt in &sheet.text_objects {
                 if !txt.text.trim().is_empty() {
                     if let Some(a) = self.emit_text_annot(txt, pbox) {

@@ -78,11 +78,13 @@ fn wal_path_for(doc_path: &Path) -> PathBuf {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageInfo {
     pub page_index: usize,
     pub width_pt: f64,
     pub height_pt: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +187,9 @@ fn extract_frontend_images(doc: &Document) -> Vec<FrontendImage> {
     let mut out = Vec::new();
     for sheet in &doc.sheets {
         for img in &sheet.images {
+            if img.id.starts_with("template_bg_") || img.id.starts_with("img_template_bg_") {
+                continue;
+            }
             out.push(FrontendImage {
                 id: img.id.clone(),
                 sheet: img.sheet,
@@ -239,7 +244,7 @@ fn extract_pdf_meta(
                             .ok()
                             .map(|p| (p.width().value as f64, p.height().value as f64))
                             .unwrap_or((595.0, 842.0));
-                        PageInfo { page_index: i, width_pt: w, height_pt: h }
+                        PageInfo { page_index: i, width_pt: w, height_pt: h, template: None }
                     })
                     .collect();
                 let outline = inkwell_pdf::extract_outline(&doc);
@@ -258,7 +263,7 @@ fn extract_pdf_meta(
         .map(|f| f.page_count())
         .unwrap_or(1);
     let page_infos = (0..n)
-        .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0 })
+        .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0, template: None })
         .collect();
     (page_infos, Vec::new())
 }
@@ -387,7 +392,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
     let arc_bytes = Arc::new(bytes);
-    let (page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
+    let (mut page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
     let n_pages = page_infos.len();
 
     let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
@@ -401,6 +406,21 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         }
         _ => Document::for_pdf(n_pages),
     };
+
+    for (i, pi) in page_infos.iter_mut().enumerate() {
+        if let Some(sheet) = doc.sheets.get(i) {
+            if let Some(ref t) = sheet.template {
+                pi.template = Some(t.clone());
+            } else if let Some(t_img) = sheet.images.iter().find(|im| im.id.starts_with("template_bg_") || im.id.starts_with("img_template_bg_")) {
+                let parts: Vec<&str> = t_img.id.split('_').collect();
+                if parts.len() >= 4 {
+                    pi.template = Some(parts[3..].join("_"));
+                } else {
+                    pi.template = Some("dark".to_string());
+                }
+            }
+        }
+    }
 
     // Replay WAL entries if journal exists from a previous crash
     let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
@@ -513,7 +533,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     let _ = std::fs::write(&path, &bytes);
 
     let arc_bytes = Arc::new(bytes);
-    let (page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
+    let (mut page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
     let n_pages = page_infos.len();
 
     let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
@@ -527,6 +547,21 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         }
         _ => Document::for_pdf(n_pages),
     };
+
+    for (i, pi) in page_infos.iter_mut().enumerate() {
+        if let Some(sheet) = doc.sheets.get(i) {
+            if let Some(ref t) = sheet.template {
+                pi.template = Some(t.clone());
+            } else if let Some(t_img) = sheet.images.iter().find(|im| im.id.starts_with("template_bg_") || im.id.starts_with("img_template_bg_")) {
+                let parts: Vec<&str> = t_img.id.split('_').collect();
+                if parts.len() >= 4 {
+                    pi.template = Some(parts[3..].join("_"));
+                } else {
+                    pi.template = Some("dark".to_string());
+                }
+            }
+        }
+    }
 
     let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
         replay_wal_journal(&path, &mut doc);
@@ -1034,6 +1069,12 @@ pub async fn save_pdf(
                 while doc.sheets.len() <= img.sheet {
                     doc.sheets.push(inkwell_core::doc::Sheet::bounded(doc.sheets.len()));
                 }
+                if img.id.starts_with("template_bg_") || img.id.starts_with("img_template_bg_") {
+                    let parts: Vec<&str> = img.id.split('_').collect();
+                    if parts.len() >= 4 {
+                        doc.sheets[img.sheet].template = Some(parts[3..].join("_"));
+                    }
+                }
                 doc.sheets[img.sheet].images.push(inkwell_core::doc::ImageObject {
                     id: img.id.clone(),
                     sheet: img.sheet,
@@ -1309,6 +1350,7 @@ pub async fn insert_blank_page(
         page_index: index,
         width_pt,
         height_pt,
+        template: None,
     })
 }
 
@@ -1610,12 +1652,16 @@ pub async fn duplicate_page(
         }));
     }
 
-    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    let cloned_template = {
+        let doc_guard = state.doc.lock().unwrap();
+        doc_guard.as_ref().and_then(|d| d.sheets.get(target_idx).and_then(|s| s.template.clone()))
+    };
 
     Ok(PageInfo {
         page_index: target_idx,
         width_pt: out_w,
         height_pt: out_h,
+        template: cloned_template,
     })
 }
 
@@ -1663,10 +1709,16 @@ pub async fn rotate_page(
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
 
+    let rot_template = {
+        let doc_guard = state.doc.lock().unwrap();
+        doc_guard.as_ref().and_then(|d| d.sheets.get(index).and_then(|s| s.template.clone()))
+    };
+
     Ok(PageInfo {
         page_index: index,
         width_pt: out_w,
         height_pt: out_h,
+        template: rot_template,
     })
 }
 
