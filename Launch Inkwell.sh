@@ -12,23 +12,38 @@ elif [ -f "$DIR/bin/libpdfium.so" ]; then
     export PDFIUM_DLL_DIR="$DIR/bin"
 fi
 
-export LD_LIBRARY_PATH="$DIR:$DIR/bin:$DIR/inkwell-app/src-tauri/target/release:$DIR/inkwell-app/src-tauri/target/debug:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$DIR:$DIR/bin:$DIR/target/release:$DIR/target/debug:$DIR/inkwell-app/src-tauri/target/release:$DIR/inkwell-app/src-tauri/target/debug:${LD_LIBRARY_PATH:-}"
+
+RELEASE_BIN=""
+DEBUG_BIN=""
+
+if [ -f "$DIR/target/release/inkwell-app" ]; then
+    RELEASE_BIN="$DIR/target/release/inkwell-app"
+elif [ -f "$DIR/inkwell-app/src-tauri/target/release/inkwell-app" ]; then
+    RELEASE_BIN="$DIR/inkwell-app/src-tauri/target/release/inkwell-app"
+fi
+
+if [ -f "$DIR/target/debug/inkwell-app" ]; then
+    DEBUG_BIN="$DIR/target/debug/inkwell-app"
+elif [ -f "$DIR/inkwell-app/src-tauri/target/debug/inkwell-app" ]; then
+    DEBUG_BIN="$DIR/inkwell-app/src-tauri/target/debug/inkwell-app"
+fi
 
 if [ -f "$DIR/inkwell-app" ]; then
     exec "$DIR/inkwell-app" "$@"
 elif [ -f "$DIR/Inkwell" ]; then
     exec "$DIR/Inkwell" "$@"
-elif [ -f "$RELEASE_BIN" ] && [ -f "$DEBUG_BIN" ]; then
+elif [ -n "$RELEASE_BIN" ] && [ -n "$DEBUG_BIN" ]; then
     if [ "$RELEASE_BIN" -nt "$DEBUG_BIN" ]; then
         exec "$RELEASE_BIN" "$@"
     else
         exec "$DEBUG_BIN" "$@"
     fi
-elif [ -f "$RELEASE_BIN" ]; then
+elif [ -n "$RELEASE_BIN" ]; then
     exec "$RELEASE_BIN" "$@"
-elif [ -f "$DEBUG_BIN" ]; then
+elif [ -n "$DEBUG_BIN" ]; then
     exec "$DEBUG_BIN" "$@"
 else
-    echo "Inkwell binary not found. Build it with: cd inkwell-app/src-tauri && cargo build"
+    echo "Inkwell binary not found. Build it with: cargo build --release -p inkwell-app"
     exit 1
 fi
