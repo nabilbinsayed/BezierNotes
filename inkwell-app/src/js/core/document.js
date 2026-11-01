@@ -99,6 +99,48 @@ export function deleteStrokes(strokeIds, { recordHistory = true } = {}) {
   return deletedStrokes;
 }
 
+/**
+ * Replace strokes with the vector fragments that survived a partial erase.
+ * The removal and the additions are recorded as ONE `erase_strokes`
+ * transaction carrying `addedStrokes`, so a single undo restores the original
+ * geometry exactly.
+ *
+ * @param {Array<object>} removedStrokes strokes to hide
+ * @param {Array<object>} addedStrokes fragments to add
+ */
+export function replaceStrokesWithFragments(removedStrokes = [], addedStrokes = [], { recordHistory = true } = {}) {
+  const removed = [];
+  for (const s of (removedStrokes || [])) {
+    if (!s) continue;
+    s.deleted = true;
+    removed.push(s);
+  }
+  const added = [];
+  for (const f of (addedStrokes || [])) {
+    if (!f) continue;
+    f.deleted = false;
+    if (!state.strokes.includes(f)) state.strokes.push(f);
+    added.push(f);
+  }
+  if (!removed.length && !added.length) return { removed, added };
+
+  rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'erase_strokes',
+      strokes: removed,
+      addedStrokes: added,
+    });
+  }
+  notifyMutation('erase_strokes', { strokes: removed, addedStrokes: added });
+  return { removed, added };
+}
+
+/** Convenience wrapper for a single split stroke. */
+export function replaceStrokeWithFragments(oldStroke, newStrokes = [], { recordHistory = true } = {}) {
+  return replaceStrokesWithFragments([oldStroke], newStrokes, { recordHistory });
+}
+
 export function clearPageInk(sheetIndex, { recordHistory = true } = {}) {
   const strokesOnSheet = (state.strokes || []).filter(s => !s.deleted && (s.sheet || 0) === sheetIndex);
   if (!strokesOnSheet.length) return [];
@@ -793,9 +835,10 @@ export function performUndo() {
     notifyMutation('undo_add_stroke', { stroke: tx.stroke });
   } else if (tx.type === 'erase_strokes' && tx.strokes) {
     for (const s of tx.strokes) s.deleted = false;
+    for (const f of (tx.addedStrokes || [])) f.deleted = true;
     rebuildStrokesBySheet();
     history.pushRedo(tx);
-    notifyMutation('undo_erase_strokes', { strokes: tx.strokes });
+    notifyMutation('undo_erase_strokes', { strokes: tx.strokes, addedStrokes: tx.addedStrokes || [] });
   } else if (tx.type === 'delete_objects') {
     for (const s of (tx.strokes || [])) s.deleted = false;
     for (const img of (tx.images || [])) img.deleted = false;
@@ -926,9 +969,10 @@ export function performRedo() {
     notifyMutation('redo_add_stroke', { stroke: tx.stroke });
   } else if (tx.type === 'erase_strokes' && tx.strokes) {
     for (const s of tx.strokes) s.deleted = true;
+    for (const f of (tx.addedStrokes || [])) f.deleted = false;
     rebuildStrokesBySheet();
     history.pushUndoRaw(tx);
-    notifyMutation('redo_erase_strokes', { strokes: tx.strokes });
+    notifyMutation('redo_erase_strokes', { strokes: tx.strokes, addedStrokes: tx.addedStrokes || [] });
   } else if (tx.type === 'delete_objects') {
     for (const s of (tx.strokes || [])) s.deleted = true;
     for (const img of (tx.images || [])) img.deleted = true;

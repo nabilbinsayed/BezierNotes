@@ -177,6 +177,221 @@ function computeStrokeBbox(pts, baseWidth = 2.0) {
   return [minX, minY, maxX, maxY];
 }
 
+/* ============================================================================
+ * Freehand Ink-to-Shape recognition (Hold-to-Snap)
+ * Detects a deliberately-held freehand pen/highlighter stroke as a straight
+ * line, rectangle, ellipse/circle or triangle, returning a clean vector point
+ * list that can replace the raw samples before commit.
+ * ========================================================================== */
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
+}
+
+/** Iterative Ramer–Douglas–Peucker polyline simplification. */
+function rdpSimplify(pts, eps) {
+  if (!pts || pts.length <= 2) return pts ? pts.slice() : [];
+  const keep = new Uint8Array(pts.length);
+  keep[0] = 1;
+  keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [first, last] = stack.pop();
+    if (last <= first + 1) continue;
+    const a = pts[first];
+    const b = pts[last];
+    let maxD = -1;
+    let maxIdx = -1;
+    for (let i = first + 1; i < last; i++) {
+      const d = distToSegment(pts[i].x, pts[i].y, a.x, a.y, b.x, b.y);
+      if (d > maxD) { maxD = d; maxIdx = i; }
+    }
+    if (maxD > eps && maxIdx > 0) {
+      keep[maxIdx] = 1;
+      stack.push([first, maxIdx], [maxIdx, last]);
+    }
+  }
+  const out = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
+function shapeLinePoints(a, b, baseW) {
+  const points = [];
+  const steps = 20;
+  const w = baseW;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    points.push({ x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y), p: 0.8, w });
+  }
+  return points;
+}
+
+/** Dense closed polygon; `verts` must repeat the first vertex at the end. */
+function shapePolygonPoints(verts, baseW, samplesPerEdge = 16) {
+  const points = [];
+  const w = baseW * 0.68;
+  for (let e = 0; e < verts.length - 1; e++) {
+    const pA = verts[e];
+    const pB = verts[e + 1];
+    for (let i = (e === 0 ? 0 : 1); i <= samplesPerEdge; i++) {
+      const t = i / samplesPerEdge;
+      points.push({ x: pA[0] + t * (pB[0] - pA[0]), y: pA[1] + t * (pB[1] - pA[1]), p: 0.5, w });
+    }
+  }
+  return points;
+}
+
+function shapeEllipsePoints(cx, cy, rx, ry, baseW, steps = 64) {
+  const points = [];
+  const w = baseW * 0.68;
+  for (let i = 0; i <= steps; i++) {
+    const theta = (i / steps) * Math.PI * 2;
+    points.push({ x: cx + rx * Math.cos(theta), y: cy + ry * Math.sin(theta), p: 0.5, w });
+  }
+  return points;
+}
+
+function dedupeConsecutive(corners, tol) {
+  const out = [];
+  for (const p of corners) {
+    const prev = out[out.length - 1];
+    if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) <= tol) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+function interiorAngles(corners) {
+  const n = corners.length;
+  const angles = [];
+  for (let i = 0; i < n; i++) {
+    const prev = corners[(i - 1 + n) % n];
+    const cur = corners[i];
+    const next = corners[(i + 1) % n];
+    const v1x = prev.x - cur.x, v1y = prev.y - cur.y;
+    const v2x = next.x - cur.x, v2y = next.y - cur.y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) { angles.push(0); continue; }
+    let cos = (v1x * v2x + v1y * v2y) / (l1 * l2);
+    cos = Math.max(-1, Math.min(1, cos));
+    angles.push((Math.acos(cos) * 180) / Math.PI);
+  }
+  return angles;
+}
+
+/**
+ * Classify a freehand stroke as a geometric primitive.
+ * @param {Array<{x:number,y:number}>} pts page-local stroke points
+ * @param {number} baseW stroke base width
+ * @returns {{kind:string, points:Array, corners?:Array}|null} null when the
+ *          stroke is not confidently one of line/rect/ellipse/triangle
+ */
+function recognizeFreehandShape(pts, baseW = 2.5) {
+  if (!Array.isArray(pts) || pts.length < 6) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let arcLen = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+    if (i > 0) arcLen += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+  }
+  if (arcLen < 28) return null;
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  const endDist = Math.hypot(last.x - first.x, last.y - first.y);
+
+  // ---- 1. Straight line -------------------------------------------------
+  const lineTol = Math.max(8, 0.055 * arcLen);
+  let maxDev = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const d = distToSegment(pts[i].x, pts[i].y, first.x, first.y, last.x, last.y);
+    if (d > maxDev) maxDev = d;
+  }
+  if (endDist > 0 && endDist / arcLen >= 0.90 && maxDev <= lineTol) {
+    let angle = Math.atan2(last.y - first.y, last.x - first.x);
+    const step = Math.PI / 4;
+    const snapped = Math.round(angle / step) * step;
+    let diff = Math.abs(angle - snapped);
+    if (diff > Math.PI) diff = Math.PI * 2 - diff;
+    if (diff <= (4 * Math.PI) / 180) angle = snapped;
+    const end = { x: first.x + endDist * Math.cos(angle), y: first.y + endDist * Math.sin(angle) };
+    return { kind: 'line', points: shapeLinePoints(first, end, baseW), corners: [{ x: first.x, y: first.y }, end] };
+  }
+
+  // ---- 2. Closed loop: triangle / rectangle / ellipse -------------------
+  const closed = endDist <= Math.max(32, 0.24 * arcLen) && width >= 16 && height >= 16;
+  if (closed) {
+    const diag = Math.hypot(width, height);
+    const tol = Math.max(4, 0.045 * diag);
+    let corners = dedupeConsecutive(rdpSimplify(pts, tol), tol);
+    if (corners.length > 1) {
+      const tip = corners[corners.length - 1];
+      if (Math.hypot(tip.x - corners[0].x, tip.y - corners[0].y) < 0.20 * diag) {
+        corners = corners.slice(0, -1);
+      }
+    }
+
+    if (corners.length === 3) {
+      const verts = [
+        [corners[0].x, corners[0].y],
+        [corners[1].x, corners[1].y],
+        [corners[2].x, corners[2].y],
+        [corners[0].x, corners[0].y],
+      ];
+      return { kind: 'triangle', points: shapePolygonPoints(verts, baseW), corners };
+    }
+
+    if (corners.length === 4) {
+      const angles = interiorAngles(corners);
+      const rectLike = angles.every((a) => a >= 62 && a <= 118);
+      if (rectLike) {
+        const verts = [
+          [minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY], [minX, minY],
+        ];
+        return { kind: 'rect', points: shapePolygonPoints(verts, baseW, 10), corners };
+      }
+    }
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    let rx = width / 2;
+    let ry = height / 2;
+    if (rx < 1e-6 || ry < 1e-6) return null;
+    let deviation = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const nx = (pts[i].x - cx) / rx;
+      const ny = (pts[i].y - cy) / ry;
+      deviation += Math.abs(Math.hypot(nx, ny) - 1);
+    }
+    const eps = deviation / pts.length;
+    if (eps <= 0.17) {
+      // Snap near-circular loops to a true circle.
+      if (Math.abs(width - height) / Math.max(width, height) <= 0.14) {
+        const r = (width + height) / 4;
+        rx = r;
+        ry = r;
+      }
+      return { kind: 'ellipse', points: shapeEllipsePoints(cx, cy, rx, ry, baseW) };
+    }
+  }
+
+  return null;
+}
+
+
 class Stroke {
   constructor(opts = {}) {
     this.id = crypto.randomUUID ? crypto.randomUUID()
@@ -688,6 +903,41 @@ function quadraticAt(p0, control, p1, t) {
   };
 }
 
+/**
+ * Build a plain, renderable stroke record from raw points (used by the partial
+ * eraser when splitting one stroke into surviving fragments).
+ * @param {Array<{x:number,y:number}>} points page-local points
+ * @param {number[]} rgb 0..1 colour triple
+ * @param {number} baseWidth stroke base width in points
+ * @param {number} sheet page index
+ * @param {string} kind 'pen' | 'highlighter'
+ */
+function buildStrokeRecord(points, rgb, baseWidth, sheet = 0, kind = 'pen') {
+  const safePoints = (points || []).map(p => ({
+    x: p.x,
+    y: p.y,
+    w: p.w !== undefined ? p.w : baseWidth,
+    p: p.p,
+  }));
+  const color = Array.isArray(rgb) && rgb.length >= 3 ? rgb.slice(0, 3) : [0.08, 0.09, 0.14];
+  const stroke = {
+    id: 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9),
+    kind: kind || 'pen',
+    rgb: color,
+    base_width: baseWidth || 1.6,
+    sheet: sheet || 0,
+    points: safePoints,
+    deleted: false,
+    _cachedPath2D: null,
+  };
+  stroke.cssColor = `rgb(${color.map(v => Math.round(v * 255)).join(',')})`;
+  stroke.bbox = computeStrokeBbox(safePoints, stroke.base_width);
+  if (typeof Path2D !== 'undefined') {
+    try { stroke._cachedPath2D = getPath2D(stroke); } catch (_) { stroke._cachedPath2D = null; }
+  }
+  return stroke;
+}
+
 function drawStroke(ctx, stroke) {
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return;
@@ -719,5 +969,5 @@ function drawStroke(ctx, stroke) {
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour, isAxisAlignedRect, smoothStrokePoints };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour, isAxisAlignedRect, smoothStrokePoints, recognizeFreehandShape, shapeLinePoints, buildStrokeRecord };
 

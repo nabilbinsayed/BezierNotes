@@ -43,7 +43,7 @@ export async function openPdfBytes(name, bytes) {
   return await invokeTauri('open_pdf_bytes', { name, bytes });
 }
 
-export async function savePdf(pathStr, strokes, images, texts) {
+function buildSavePayload(strokes, images, texts) {
   const payload = {
     strokes: (strokes || []).map(s => ({
       id: String(s.id),
@@ -89,10 +89,49 @@ export async function savePdf(pathStr, strokes, images, texts) {
       created_at: Number(b.createdAt || b.created_at || 0),
     })),
   };
+  return payload;
+}
+
+export async function savePdf(pathStr, strokes, images, texts) {
+  const payload = buildSavePayload(strokes, images, texts);
   if (!pathStr) {
     return await invokeTauri('save_pdf_dialog', payload);
   }
   return await invokeTauri('save_pdf', { outPathStr: pathStr, ...payload });
+}
+
+/**
+ * Export a copy of the document with optional page subsetting and flattening.
+ * Never mutates the live session's PDF bytes, path or WAL on the backend.
+ * @param {{selectedPages?: number[]|null, flatten?: boolean, strokes?: any[], images?: any[], texts?: any[]}} options
+ */
+export async function exportPdfCustom({ selectedPages = null, flatten = false, strokes, images, texts } = {}) {
+  const payload = buildSavePayload(
+    strokes || state.strokes,
+    images || state.images,
+    texts || state.textObjects,
+  );
+  return await invokeTauri('export_pdf_custom_dialog', {
+    ...payload,
+    selectedPages: Array.isArray(selectedPages) && selectedPages.length ? selectedPages : null,
+    flatten: !!flatten,
+  });
+}
+
+/**
+ * Ask the backend whether the open PDF's backing file changed on disk
+ * (cloud sync, external editor, git checkout).
+ * @returns {Promise<boolean>}
+ */
+export async function checkExternalFileChange() {
+  const invoke = getInvoke();
+  if (!invoke) return false;
+  try {
+    return !!(await invokeTauri('check_external_file_change', {}));
+  } catch (err) {
+    console.warn('[inkwell/ipc] check_external_file_change failed:', err);
+    return false;
+  }
 }
 
 export async function newWhiteboard() {
@@ -111,6 +150,14 @@ export async function extractOutline() {
 
 export async function fetchTile(pageIndex, rect, px) {
   return await invokeTauri('render_tile', { page: pageIndex, rect, px });
+}
+
+/**
+ * Warm the backend full-page bitmap cache without transferring pixels.
+ * Used for idle prefetch of the next page so scrolling lands on ready tiles.
+ */
+export async function prefetchPage(pageIndex, px) {
+  return await invokeTauri('prefetch_page', { page: pageIndex, px });
 }
 
 // ---- Vector Stroke Persistence ----

@@ -2221,6 +2221,622 @@ with sync_playwright() as pw:
     pg.wait_for_timeout(100)
 
     # -------------------------------------------------------------
+    # T23: Rendering Smoothness (Plan 079 dry page cache, Plan 080 wet chunking)
+    # -------------------------------------------------------------
+    print("\n=== T23 Offscreen Dry Cache & Incremental Wet Stroke ===", flush=True)
+    dry_cache_res = pg.evaluate("""() => {
+      const vp = window.getViewport();
+      vp.zoom = 1.0;
+      // Isolate the cache test from annotations left by earlier sections.
+      window.state.images = [];
+      window.state.textObjects = [];
+      window.state.strokes = [];
+      window.state._strokesBySheet = null;
+      for (let k = 0; k < 300; k++) {
+        const pts = [];
+        for (let i = 0; i < 12; i++) pts.push({ x: 40 + i * 4, y: 60 + k * 2, p: 0.7, w: 1.6 });
+        window.state.strokes.push({
+          id: 'perf_' + k, kind: 'pen', rgb: [0.05, 0.05, 0.1], cssColor: '#111',
+          base_width: 1.6, sheet: 0, deleted: false, points: pts,
+          bbox: window.Ink.computeStrokeBbox(pts, 1.6),
+        });
+      }
+      window.state._strokesBySheet = null;
+      window.compositor.invalidateDryPageCache();
+      // Warm-up frame establishes the settled scale; the next one caches.
+      window.compositor.redrawAll();
+      window.compositor.redrawAll();
+      const rendersSettled = window.compositor.getDryPageRenderCount();
+      const cacheSize = window.compositor.getDryPageCacheSize();
+      vp.panX -= 30; vp.panY -= 20;
+      const t0 = performance.now();
+      for (let i = 0; i < 5; i++) { window.compositor.redrawAll(); vp.panX -= 2; }
+      const panCost = (performance.now() - t0) / 5;
+      const rendersAfterPan = window.compositor.getDryPageRenderCount();
+      const dryLen = document.getElementById('dry').toDataURL().length;
+
+      // A stroke that spills into the page margin must fall back to the exact
+      // vector path (the cached bitmap is page-sized), and still paint.
+      const marginPts = [
+        { x: 40, y: 800, p: 0.7, w: 1.6 },
+        { x: 40, y: 860, p: 0.7, w: 1.6 },
+      ];
+      window.state.strokes.push({
+        id: 'perf_margin', kind: 'pen', rgb: [0.5, 0.05, 0.05], cssColor: '#8a0d0d',
+        base_width: 1.6, sheet: 0, deleted: false, points: marginPts,
+        bbox: window.Ink.computeStrokeBbox(marginPts, 1.6),
+      });
+      window.state._strokesBySheet = null;
+      window.compositor.redrawAll();
+      const rendersAfterMargin = window.compositor.getDryPageRenderCount();
+      const dryLenAfterMargin = document.getElementById('dry').toDataURL().length;
+      const marginCacheable = window.compositor.isPageCacheable(0);
+      return {
+        rendersSettled, rendersAfterPan, cacheSize, panCost, dryLen,
+        rendersAfterMargin, dryLenAfterMargin, marginCacheable,
+        strokes: window.state.strokes.length,
+      };
+    }""")
+    check("pan frames blit the cached #dry page bitmap instead of re-rasterizing ink",
+          dry_cache_res["cacheSize"] >= 2 and
+          dry_cache_res["rendersAfterPan"] == dry_cache_res["rendersSettled"] and
+          dry_cache_res["rendersAfterMargin"] == dry_cache_res["rendersAfterPan"] and
+          dry_cache_res["marginCacheable"] is False and
+          dry_cache_res["dryLen"] > 5000 and
+          dry_cache_res["dryLenAfterMargin"] > 5000,
+          f"res={dry_cache_res}")
+
+    wet_chunk_res = pg.evaluate("""() => {
+      const vp = window.getViewport();
+      window.state.strokes = [];
+      window.state._strokesBySheet = null;
+      window.compositor.invalidateDryPageCache();
+      window.compositor.redrawAll();
+      const pl = vp.getPageLayout(0);
+      const t0 = performance.now();
+      window.penTool.onPenDown({ pressure: 0.6, timeStamp: t0 }, [pl.x + 60, pl.y + 300], 'left', vp);
+      const N = 700;
+      for (let i = 1; i < N; i++) {
+        const wx = pl.x + 60 + i * 0.45;
+        const wy = pl.y + 300 + Math.sin(i * 0.05) * 12;
+        window.penTool.onPenMove(
+          { pressure: 0.6, buttons: 1, timeStamp: t0 + i * 3 }, [wx, wy], 'left', vp, { render: false }
+        );
+      }
+      window.penTool.renderActiveWetStroke('left', vp);
+      const chunks = window.state.cur ? window.state.cur._wetChunks.length : -1;
+      const chunkedIndex = window.state.cur ? window.state.cur._wetChunkedIndex : -1;
+      // Contiguity: every sampled stroke point must be painted on the wet layer.
+      const wctx = window.compositor.getContexts().wctx;
+      const img = wctx.getImageData(0, 0, wctx.canvas.width, wctx.canvas.height).data;
+      const W = wctx.canvas.width, H = wctx.canvas.height;
+      let misses = 0, sampled = 0;
+      const allPts = window.state.cur.points;
+      for (let i = 0; i < allPts.length; i += 17) {
+        const [px, py] = vp.worldToScreen(pl.x + allPts[i].x, pl.y + allPts[i].y, 'left');
+        sampled++;
+        let hit = false;
+        for (let dy = -5; dy <= 5 && !hit; dy++) {
+          for (let dx = -5; dx <= 5 && !hit; dx++) {
+            const xx = Math.round(px + dx), yy = Math.round(py + dy);
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            if (img[(yy * W + xx) * 4 + 3] > 8) hit = true;
+          }
+        }
+        if (!hit) misses++;
+      }
+      const live = window.state.cur.points.map(p => ({ x: p.x, y: p.y }));
+      window.penTool.onPenUp({}, vp);
+      const committed = window.state.strokes[window.state.strokes.length - 1];
+      const cpts = committed ? committed.points.map(p => ({ x: p.x, y: p.y })) : [];
+      let maxDiff = 0;
+      if (cpts.length === live.length) {
+        for (let i = 0; i < live.length; i++) {
+          maxDiff = Math.max(maxDiff, Math.hypot(live[i].x - cpts[i].x, live[i].y - cpts[i].y));
+        }
+      } else maxDiff = 999;
+      return { chunks, chunkedIndex, misses, sampled, maxDiff, points: cpts.length };
+    }""")
+    check("long wet stroke freezes into Path2D chunks that stay gap-free and commit-exact",
+          wet_chunk_res["chunks"] >= 20 and
+          wet_chunk_res["chunkedIndex"] >= wet_chunk_res["points"] - 40 and
+          wet_chunk_res["misses"] == 0 and
+          wet_chunk_res["maxDiff"] < 1e-4,
+          f"res={wet_chunk_res}")
+
+    dry_invalidate_res = pg.evaluate("""import('./js/core/document.js').then((docOps) => {
+      const stroke = window.state.strokes.find(s => !s.deleted);
+      const rendersBefore = window.compositor.getDryPageRenderCount();
+      docOps.deleteStrokes([stroke.id], { recordHistory: false });
+      const sizeAfterMutation = window.compositor.getDryPageCacheSize();
+      window.compositor.redrawAll();
+      return {
+        sizeAfterMutation,
+        sizeAfterRedraw: window.compositor.getDryPageCacheSize(),
+        rerendered: window.compositor.getDryPageRenderCount() > rendersBefore,
+      };
+    })""")
+    check("document mutations invalidate the cached #dry page bitmaps",
+          dry_invalidate_res["sizeAfterMutation"] == 0 and
+          dry_invalidate_res["rerendered"] and
+          dry_invalidate_res["sizeAfterRedraw"] >= 1,
+          f"res={dry_invalidate_res}")
+
+    # -------------------------------------------------------------
+    # T24: Spatial AABB Acceleration (Plan 082)
+    # -------------------------------------------------------------
+    print("\n=== T24 Lasso AABB Pre-Filtering ===", flush=True)
+    lasso_aabb_res = pg.evaluate("""import('./js/tools/lasso.js').then((lassoTool) => {
+      const vp = window.getViewport();
+      vp.zoom = 1.0;
+      const pl = vp.getPageLayout(0);
+      const pl1 = vp.getPageLayout(1);
+      window.state.strokes = [];
+      window.state.images = (window.state.images || []).filter(i => i.deleted);
+      window.state.textObjects = (window.state.textObjects || []).filter(t => t.deleted);
+      window.state.selectedStrokes = [];
+      window.state.selectedImages = [];
+      window.state.selectedTextObjects = [];
+      const makeStroke = (id, sheet, x, y, lx, ly) => {
+        const pts = [
+          { x: x, y: y, p: 0.7, w: 1.6 },
+          { x: x + lx, y: y + ly, p: 0.7, w: 1.6 },
+        ];
+        return {
+          id, kind: 'pen', rgb: [0.05, 0.05, 0.1], cssColor: '#111', base_width: 1.6,
+          sheet, deleted: false, points: pts, bbox: window.Ink.computeStrokeBbox(pts, 1.6),
+        };
+      };
+      // 300 strokes scattered across page 0, 60 on page 1
+      for (let k = 0; k < 300; k++) {
+        const col = k % 20, row = Math.floor(k / 20);
+        window.state.strokes.push(makeStroke('aabb0_' + k, 0, 40 + col * 25, 40 + row * 26, 14, 6));
+      }
+      for (let k = 0; k < 60; k++) {
+        window.state.strokes.push(makeStroke('aabb1_' + k, 1, 40 + (k % 10) * 30, 40 + Math.floor(k / 10) * 30, 14, 6));
+      }
+      window.state._strokesBySheet = null;
+
+      // Lasso a box around the first two rows of page 0 only.
+      const box = [pl.x + 20, pl.y + 20, pl.x + 550, pl.y + 90];
+      const down = [box[0], box[1]];
+      lassoTool.onLassoDown({}, down, vp.worldToScreen(down[0], down[1], 'left'), 'left', vp);
+      const ring = [
+        [box[2], box[1]], [box[2], box[3]], [box[0], box[3]], [box[0], box[1]],
+      ];
+      const t0 = performance.now();
+      for (const p of ring) {
+        lassoTool.onLassoMove({}, p, vp.worldToScreen(p[0], p[1], 'left'), 'left', vp);
+      }
+      lassoTool.onLassoUp({}, vp);
+      const elapsed = performance.now() - t0;
+
+      const sel = window.state.selectedStrokes;
+      const wrongSheet = sel.filter(s => s.sheet !== 0).length;
+      const outside = sel.filter(s => {
+        const b = s.bbox;
+        return pl.x + b[2] < box[0] || pl.x + b[0] > box[2] ||
+               pl.y + b[3] < box[1] || pl.y + b[1] > box[3];
+      }).length;
+      const expectedMin = 20 * 2; // two full rows of 20 strokes
+      return { selected: sel.length, wrongSheet, outside, elapsed, expectedMin, total: window.state.strokes.length };
+    })""")
+    check("lasso selects only strokes whose AABB intersects the polygon (no cross-page leakage)",
+          lasso_aabb_res["selected"] >= lasso_aabb_res["expectedMin"] and
+          lasso_aabb_res["selected"] < lasso_aabb_res["total"] and
+          lasso_aabb_res["wrongSheet"] == 0 and
+          lasso_aabb_res["outside"] == 0,
+          f"res={lasso_aabb_res}")
+
+    selection_bounds_res = pg.evaluate("""() => {
+      const vp = window.getViewport();
+      const pl = vp.getPageLayout(0);
+      const t0 = performance.now();
+      let b = null;
+      for (let i = 0; i < 50; i++) b = window.overlays.getSelectionBounds(window.state, vp);
+      const elapsed = (performance.now() - t0) / 50;
+      let expectedX0 = Infinity;
+      let expectedY0 = Infinity;
+      for (const s of window.state.selectedStrokes) {
+        expectedX0 = Math.min(expectedX0, pl.x + s.bbox[0]);
+        expectedY0 = Math.min(expectedY0, pl.y + s.bbox[1]);
+      }
+      return { hasBounds: !!b, x0: b ? b.x0 : null, y0: b ? b.y0 : null, expectedX0, expectedY0, elapsed };
+    }""")
+    check("selection bounds come from cached stroke bboxes without per-point scans",
+          selection_bounds_res["hasBounds"] and
+          abs(selection_bounds_res["x0"] - selection_bounds_res["expectedX0"]) < 0.01 and
+          abs(selection_bounds_res["y0"] - selection_bounds_res["expectedY0"]) < 0.01,
+          f"res={selection_bounds_res}")
+
+    # -------------------------------------------------------------
+    # T25: Hold-to-Snap Smart Shape Recognition (Plan 083)
+    # -------------------------------------------------------------
+    print("\n=== T25 Hold-to-Snap Shape Recognition ===", flush=True)
+    shape_recog_res = pg.evaluate("""() => {
+      const jitter = (i) => Math.sin(i * 2.7) * 1.1;
+      const line = [];
+      for (let i = 0; i < 40; i++) line.push({ x: 40 + i * 6, y: 200 + jitter(i) });
+      const rect = [];
+      const addEdge = (x0, y0, x1, y1, steps) => {
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          if (rect.length && i === 0) continue;
+          rect.push({ x: x0 + t * (x1 - x0) + jitter(i) * 0.6, y: y0 + t * (y1 - y0) + jitter(i + 3) * 0.6 });
+        }
+      };
+      addEdge(100, 100, 260, 100, 12);
+      addEdge(260, 100, 260, 220, 12);
+      addEdge(260, 220, 100, 220, 12);
+      addEdge(100, 220, 100, 100, 12);
+      const circle = [];
+      for (let i = 0; i <= 64; i++) {
+        const th = (i / 64) * Math.PI * 2;
+        circle.push({ x: 300 + Math.cos(th) * 70 + jitter(i) * 1.4, y: 300 + Math.sin(th) * 70 + jitter(i + 2) * 1.4 });
+      }
+      const tri = [];
+      const verts = [[100, 500], [200, 500], [150, 400], [100, 500]];
+      for (let e = 0; e < 3; e++) {
+        for (let i = e === 0 ? 0 : 1; i <= 14; i++) {
+          const t = i / 14;
+          tri.push({
+            x: verts[e][0] + t * (verts[e + 1][0] - verts[e][0]) + jitter(i) * 0.8,
+            y: verts[e][1] + t * (verts[e + 1][1] - verts[e][1]) + jitter(i + 5) * 0.8,
+          });
+        }
+      }
+      const scribble = [];
+      for (let i = 0; i < 60; i++) scribble.push({ x: 60 + i * 3, y: 380 + Math.sin(i * 0.55) * 40 });
+
+      const recognize = window.Ink.recognizeFreehandShape;
+      const rLine = recognize(line, 2);
+      const rRect = recognize(rect, 2);
+      const rCircle = recognize(circle, 2);
+      const rTri = recognize(tri, 2);
+      const rScribble = recognize(scribble, 2);
+      const allFinite = (r) => r && r.points && r.points.length >= 2 && r.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+      return {
+        line: rLine && rLine.kind, lineOk: allFinite(rLine),
+        rect: rRect && rRect.kind, rectOk: allFinite(rRect),
+        circle: rCircle && rCircle.kind, circleOk: allFinite(rCircle),
+        triangle: rTri && rTri.kind, triangleOk: allFinite(rTri),
+        scribble: rScribble ? rScribble.kind : null,
+      };
+    }""")
+    check("recognizeFreehandShape classifies line, rectangle, circle and triangle with valid point arrays",
+          shape_recog_res["line"] == "line" and shape_recog_res["lineOk"] and
+          shape_recog_res["rect"] == "rect" and shape_recog_res["rectOk"] and
+          shape_recog_res["circle"] == "ellipse" and shape_recog_res["circleOk"] and
+          shape_recog_res["triangle"] == "triangle" and shape_recog_res["triangleOk"] and
+          shape_recog_res["scribble"] is None,
+          f"res={shape_recog_res}")
+
+    pg.evaluate("""() => {
+      window.state.activeTool = 'pen';
+      window.state.smartShapeHoldEnabled = true;
+      window.state.strokes = [];
+      window.state._strokesBySheet = null;
+      const vp = window.getViewport();
+      const pl = vp.getPageLayout(0);
+      window.__snapT0 = performance.now();
+      window.penTool.onPenDown(
+        { pressure: 0.6, timeStamp: window.__snapT0 }, [pl.x + 80, pl.y + 400], 'left', vp
+      );
+      for (let i = 1; i < 30; i++) {
+        window.penTool.onPenMove(
+          { pressure: 0.6, buttons: 1, timeStamp: window.__snapT0 + i * 8 },
+          [pl.x + 80 + i * 6, pl.y + 400 + Math.sin(i * 1.7) * 1.2],
+          'left', vp, { render: true }
+        );
+      }
+      window.__snapRawCount = window.state.cur.points.length;
+      window.__snapRawPts = window.state.cur.points.map(p => ({ x: p.x, y: p.y }));
+    }""")
+    pg.wait_for_timeout(650)
+    snap_res = pg.evaluate("""() => {
+      const snapped = window.state.holdSnappedShape;
+      const cur = window.state.cur;
+      const pts = cur ? cur.points : [];
+      const p0 = pts[0] || null;
+      const pN = pts[pts.length - 1] || null;
+      let maxDev = 0;
+      if (p0 && pN) {
+        const dx = pN.x - p0.x, dy = pN.y - p0.y;
+        const len = Math.hypot(dx, dy) || 1;
+        for (const p of pts) {
+          const d = Math.abs((p.x - p0.x) * dy - (p.y - p0.y) * dx) / len;
+          maxDev = Math.max(maxDev, d);
+        }
+      }
+      const reverted = window.penTool.revertHoldSnap(window.getViewport());
+      const afterRevert = window.penTool && window.state.cur ? window.state.cur.points.length : 0;
+      const rawRestored = !!window.state.cur &&
+        window.state.cur.points.length === window.__snapRawCount;
+      // Re-snap: rebuild the dwell and let the timer fire again.
+      return {
+        kind: snapped ? snapped.kind : null,
+        pointCount: pts.length,
+        maxDev,
+        reverted,
+        afterRevert,
+        rawRestored,
+        rawCount: window.__snapRawCount,
+        holdActive: !!snapped,
+      };
+    }""")
+    check("380 ms stationary hold snaps the live freehand stroke to a straight line",
+          snap_res["holdActive"] and snap_res["kind"] == "line" and
+          snap_res["maxDev"] < 0.01 and snap_res["pointCount"] <= 24 and
+          snap_res["rawCount"] > 20,
+          f"res={snap_res}")
+    check("reverting a snap restores the exact raw freehand samples",
+          snap_res["reverted"] and snap_res["rawRestored"] and
+          snap_res["afterRevert"] == snap_res["rawCount"],
+          f"res={snap_res}")
+    pg.evaluate("""() => {
+      if (window.state.cur) {
+        window.penTool.onPenUp({}, window.getViewport());
+      }
+    }""")
+
+    # -------------------------------------------------------------
+    # T26: Dual-Mode Eraser — partial vector splitting (Plan 084)
+    # -------------------------------------------------------------
+    print("\n=== T26 Whole-Stroke vs Partial Split Eraser ===", flush=True)
+    split_unit_res = pg.evaluate("""import('./js/tools/eraser.js').then((eraserTool) => {
+      const mk = (pts) => ({
+        id: 'split_probe', kind: 'pen', rgb: [0.1, 0.1, 0.1], base_width: 2,
+        sheet: 0, deleted: false, points: pts,
+        bbox: window.Ink.computeStrokeBbox(pts, 2),
+      });
+      const linePts = [];
+      for (let i = 0; i <= 40; i++) linePts.push({ x: 100 + i * 5, y: 200, p: 0.8, w: 2 });
+      const two = eraserTool.splitStrokeByCircle(mk(linePts), 200, 200, 12);
+      const none = eraserTool.splitStrokeByCircle(mk(linePts), 200, 200, 500);
+      const whole = eraserTool.splitStrokeByCircle(mk([{ x: 0, y: 0 }, { x: 1, y: 1 }]), 0.5, 0.5, 3);
+      return {
+        twoCount: two ? two.length : -1,
+        twoKinds: two ? two.map(f => f.kind) : [],
+        twoVec: two ? two.every(f => Array.isArray(f.points) && f.points.length >= 2 && !!(f._cachedPath2D || typeof Path2D === 'undefined')) : false,
+        gapOk: two && two.length === 2
+          ? (Math.hypot(two[0].points[two[0].points.length - 1].x - 188, 0) < 2.5 &&
+             Math.hypot(two[1].points[0].x - 212, 0) < 2.5)
+          : false,
+        noneCount: none ? none.length : -1,
+        wholeCount: whole ? whole.length : -1,
+      };
+    })""")
+    check("splitStrokeByCircle yields exact-boundary vector fragments and full coverage erases everything",
+          split_unit_res["twoCount"] == 2 and split_unit_res["twoVec"] and
+          split_unit_res["gapOk"] and split_unit_res["noneCount"] == 0 and
+          split_unit_res["wholeCount"] == 0,
+          f"res={split_unit_res}")
+
+    pg.locator("#btnDockEraser").click()
+    pg.wait_for_timeout(60)
+    first_mode = pg.evaluate("window.state.eraserMode")
+    pg.locator("#btnDockEraser").click()
+    pg.wait_for_timeout(60)
+    second_mode = pg.evaluate("window.state.eraserMode")
+    eraser_btn_state = pg.evaluate("""(() => {
+      const b = document.getElementById('btnDockEraser');
+      return { title: b.title, partialClass: b.classList.contains('eraser-partial'), mode: b.dataset.eraserMode };
+    })()""")
+    check("clicking the active eraser toggles whole-stroke ↔ partial split with a clear indicator",
+          first_mode == "stroke" and second_mode == "partial" and
+          eraser_btn_state["partialClass"] and eraser_btn_state["mode"] == "partial" and
+          "Partial" in eraser_btn_state["title"],
+          f"first={first_mode} second={second_mode} btn={eraser_btn_state}")
+
+    partial_erase_res = pg.evaluate("""import('./js/tools/eraser.js').then((eraserTool) => {
+      const vp = window.getViewport();
+      const pl = vp.getPageLayout(0);
+      window.state.eraserMode = 'partial';
+      window.state.eraserRadius = 14;
+      window.state.strokes = [];
+      window.state._strokesBySheet = null;
+      const pts = [];
+      for (let i = 0; i <= 60; i++) pts.push({ x: 60 + i * 5, y: 300, p: 0.8, w: 2.4 });
+      const original = {
+        id: 'partial_probe', kind: 'pen', rgb: [0.1, 0.1, 0.1], base_width: 2.4,
+        sheet: 0, deleted: false, points: pts, bbox: window.Ink.computeStrokeBbox(pts, 2.4),
+      };
+      window.state.strokes.push(original);
+      window.state._strokesBySheet = null;
+
+      const wx = pl.x + 210;
+      const wy = pl.y + 300;
+      eraserTool.onEraserDown({}, [wx, wy], 'left', vp);
+      eraserTool.onEraserUp();
+
+      const live = window.state.strokes.filter(s => !s.deleted);
+      return {
+        liveCount: live.length,
+        allVector: live.every(s => Array.isArray(s.points) && s.points.length >= 2),
+        originalDeleted: original.deleted,
+      };
+    })""")
+    undo_res = pg.evaluate("""import('./js/core/document.js').then((docOps) => {
+      const before = window.state.strokes.filter(s => !s.deleted).length;
+      docOps.performUndo();
+      const afterUndo = window.state.strokes.filter(s => !s.deleted);
+      docOps.performRedo();
+      const afterRedo = window.state.strokes.filter(s => !s.deleted).length;
+      return {
+        before,
+        afterUndo: afterUndo.length,
+        restoredPoints: afterUndo.length === 1 ? afterUndo[0].points.length : -1,
+        afterRedo,
+      };
+    })""")
+    check("partial erase splits one stroke into two vector fragments with atomic undo/redo",
+          partial_erase_res["liveCount"] == 2 and partial_erase_res["allVector"] and
+          undo_res["before"] == 2 and undo_res["afterUndo"] == 1 and
+          undo_res["restoredPoints"] >= 60 and undo_res["afterRedo"] == 2,
+          f"erase={partial_erase_res} undo={undo_res}")
+    pg.evaluate("window.state.eraserMode = 'stroke'")
+
+    # -------------------------------------------------------------
+    # T27: Smart PDF Export — page ranges & flatten (Plan 085)
+    # -------------------------------------------------------------
+    print("\n=== T27 Smart PDF Export (Ranges & Flatten) ===", flush=True)
+    range_parse_res = pg.evaluate("""(() => {
+      const p = window.parsePageRangeSpec;
+      return {
+        basic: p('1-3, 5, 8-10', 12),
+        reversed: p('5-3', 10),
+        clamped: p('0, 9-40', 10),
+        dedup: p('2,2,2-3', 5),
+        junk: p('abc, 4x, ,', 10),
+        empty: p('', 10),
+        oneBased: p('1', 3),
+      };
+    })()""")
+    check("parsePageRangeSpec handles ranges, reversals, clamping, dedupe and junk input",
+          range_parse_res["basic"] == [0, 1, 2, 4, 7, 8, 9] and
+          range_parse_res["reversed"] == [2, 3, 4] and
+          range_parse_res["clamped"] == [8, 9] and
+          range_parse_res["dedup"] == [1, 2] and
+          range_parse_res["junk"] == [] and
+          range_parse_res["empty"] == [] and
+          range_parse_res["oneBased"] == [0],
+          f"res={range_parse_res}")
+
+    export_ui_res = pg.evaluate("""(() => {
+      window.toolbar.openSettingsModal && window.toolbar.closeSettingsModal();
+      document.getElementById('exportModal').classList.remove('hidden');
+      document.getElementById('btnHeaderExport').click();
+      const sel = document.getElementById('exportRangeMode');
+      const input = document.getElementById('exportCustomRangeInput');
+      sel.value = 'custom';
+      sel.dispatchEvent(new Event('change'));
+      const customVisible = !input.classList.contains('hidden');
+      const annotatedLabel = sel.querySelector('option[value="annotated"]').textContent;
+      const hint = document.getElementById('exportRangeHint').textContent;
+      const btn = document.getElementById('exportConfirmBtn');
+      const btnBox = btn.getBoundingClientRect();
+      const flatten = document.getElementById('exportFlattenCheckbox');
+      sel.value = 'all';
+      sel.dispatchEvent(new Event('change'));
+      const customHidden = input.classList.contains('hidden');
+      return {
+        customVisible, customHidden, annotatedLabel, hint,
+        btnHeight: btnBox.height, hasFlatten: !!flatten,
+        options: [...sel.options].map(o => o.value),
+      };
+    })()""")
+    check("export modal exposes range modes, custom input, flatten toggle and a 44px export button",
+          export_ui_res["customVisible"] and export_ui_res["customHidden"] and
+          export_ui_res["hasFlatten"] and export_ui_res["btnHeight"] >= 44 and
+          export_ui_res["options"] == ["all", "annotated", "current", "custom"] and
+          "Annotated Pages Only" in export_ui_res["annotatedLabel"] and
+          "page" in export_ui_res["hint"],
+          f"res={export_ui_res}")
+
+    export_call_res = pg.evaluate("""(async () => {
+      const originalInvoke = window.__TAURI__.core.invoke;
+      let captured = null;
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd === 'export_pdf_custom_dialog') {
+          captured = { cmd, args };
+          return '/tmp/exported.pdf';
+        }
+        return originalInvoke(cmd, args);
+      };
+      const pathBefore = window.state.currentDocPath;
+      const payloadBefore = window.state.pdfBytes;
+      let ok = false;
+      try {
+        ok = await window.exportPdfWithDialog({ selectedPages: [0, 2], flatten: true });
+      } finally {
+        window.__TAURI__.core.invoke = originalInvoke;
+      }
+      const pathAfter = window.state.currentDocPath;
+      const payloadAfter = window.state.pdfBytes;
+      return {
+        ok,
+        cmd: captured ? captured.cmd : null,
+        selectedPages: captured ? captured.args.selectedPages : null,
+        flatten: captured ? captured.args.flatten : null,
+        hasStrokes: !!(captured && Array.isArray(captured.args.strokes)),
+        pathUnchanged: pathBefore === pathAfter,
+        payloadUnchanged: payloadBefore === payloadAfter,
+      };
+    })()""")
+    check("export dispatches selectedPages/flatten without mutating the live session",
+          export_call_res["ok"] and export_call_res["cmd"] == "export_pdf_custom_dialog" and
+          export_call_res["selectedPages"] == [0, 2] and export_call_res["flatten"] is True and
+          export_call_res["hasStrokes"] and export_call_res["pathUnchanged"] and
+          export_call_res["payloadUnchanged"],
+          f"res={export_call_res}")
+    pg.evaluate("document.getElementById('exportModal').classList.add('hidden')")
+
+    # -------------------------------------------------------------
+    # T28: External file watcher & non-destructive reload (Plan 086)
+    # -------------------------------------------------------------
+    print("\n=== T28 External File Change Guard ===", flush=True)
+    external_res = pg.evaluate("""(async () => {
+      const originalInvoke = window.__TAURI__.core.invoke;
+      let openCalled = false;
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd === 'check_external_file_change') return true;
+        if (cmd === 'open_pdf') {
+          openCalled = true;
+          return {
+            page_infos: [
+              { page_index: 0, width_pt: 612.0, height_pt: 792.0, template: 'blank' },
+              { page_index: 1, width_pt: 612.0, height_pt: 792.0, template: 'blank' },
+            ],
+            loaded_strokes: [],
+            loaded_images: [],
+            loaded_texts: [],
+            outline: [],
+            bookmarks: [],
+          };
+        }
+        return originalInvoke(cmd, args);
+      };
+
+      window.state.currentDocPath = '/tmp/inkwell-reload-test.pdf';
+      window.state.strokes = [{
+        id: 'reload_keep_me', kind: 'pen', rgb: [0.2, 0.1, 0.4], cssColor: '#332f66',
+        base_width: 2, sheet: 0, deleted: false,
+        points: [{ x: 30, y: 40, p: 0.7, w: 2 }, { x: 90, y: 60, p: 0.7, w: 2 }],
+        bbox: window.Ink.computeStrokeBbox([{ x: 30, y: 40, p: 0.7, w: 2 }, { x: 90, y: 60, p: 0.7, w: 2 }], 2),
+      }];
+
+      const detected = await window.checkForExternalChanges();
+      const banner = document.getElementById('externalChangeBanner');
+      const bannerVisible = !banner.classList.contains('hidden');
+      const btn = document.getElementById('btnReloadExternalPdf');
+      const btnHeight = btn ? btn.getBoundingClientRect().height : 0;
+
+      const reloaded = await window.reloadExternalPdf();
+      const strokesAfter = window.state.strokes.filter(s => !s.deleted).map(s => s.id);
+      const pagesAfter = (window.state.pageInfos || []).length;
+      const pageWidth = (window.state.pageInfos || [{}])[0].width_pt;
+      const bannerHiddenAfter = banner.classList.contains('hidden');
+      const dirty = window.state.isDirty;
+
+      window.__TAURI__.core.invoke = originalInvoke;
+      window.state.currentDocPath = null;
+      return {
+        detected, bannerVisible, btnHeight, openCalled, reloaded,
+        strokesAfter, pagesAfter, pageWidth, bannerHiddenAfter, dirty,
+      };
+    })()""")
+    check("external change detection shows a 44px non-destructive reload banner",
+          external_res["detected"] and external_res["bannerVisible"] and
+          external_res["btnHeight"] >= 44,
+          f"res={external_res}")
+    check("reload adopts the new base PDF while preserving unsaved annotations",
+          external_res["openCalled"] and external_res["reloaded"] and
+          external_res["strokesAfter"] == ["reload_keep_me"] and
+          external_res["pagesAfter"] == 2 and abs(external_res["pageWidth"] - 612.0) < 0.01 and
+          external_res["bannerHiddenAfter"] and external_res["dirty"],
+          f"res={external_res}")
+
+    # -------------------------------------------------------------
     # T14: Console Hygiene
     # -------------------------------------------------------------
     print("\n=== T14 Console Hygiene ===", flush=True)

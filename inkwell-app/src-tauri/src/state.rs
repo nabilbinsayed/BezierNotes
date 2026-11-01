@@ -16,7 +16,9 @@ pub struct CachedPageBitmap {
     pub page: u32,
     pub target_w: i32,
     pub target_h: i32,
-    pub bgra_bytes: Arc<Vec<u8>>,
+    /// Normalized, opaque RGBA pixels (alpha already composited over white), so
+    /// tile crops are plain row memcpys on every cache hit.
+    pub rgba_bytes: Arc<Vec<u8>>,
     pub bitmap_w: u32,
     pub bitmap_h: u32,
 }
@@ -41,7 +43,7 @@ impl PageBitmapLruCache {
     pub fn get(&mut self, page: u32, target_w: i32, target_h: i32) -> Option<(Arc<Vec<u8>>, u32, u32)> {
         if let Some(pos) = self.entries.iter().position(|c| c.page == page && c.target_w == target_w && c.target_h == target_h) {
             let item = self.entries.remove(pos);
-            let res = (item.bgra_bytes.clone(), item.bitmap_w, item.bitmap_h);
+            let res = (item.rgba_bytes.clone(), item.bitmap_w, item.bitmap_h);
             self.entries.push(item);
             Some(res)
         } else {
@@ -52,12 +54,12 @@ impl PageBitmapLruCache {
     pub fn put(&mut self, entry: CachedPageBitmap) {
         if let Some(pos) = self.entries.iter().position(|c| c.page == entry.page && c.target_w == entry.target_w && c.target_h == entry.target_h) {
             let old = self.entries.remove(pos);
-            self.current_bytes = self.current_bytes.saturating_sub(old.bgra_bytes.len());
+            self.current_bytes = self.current_bytes.saturating_sub(old.rgba_bytes.len());
         }
-        let new_bytes = entry.bgra_bytes.len();
+        let new_bytes = entry.rgba_bytes.len();
         while !self.entries.is_empty() && (self.current_bytes + new_bytes > self.max_bytes || self.entries.len() >= self.max_entries) {
             let evicted = self.entries.remove(0);
-            self.current_bytes = self.current_bytes.saturating_sub(evicted.bgra_bytes.len());
+            self.current_bytes = self.current_bytes.saturating_sub(evicted.rgba_bytes.len());
         }
         self.current_bytes += new_bytes;
         self.entries.push(entry);
@@ -94,8 +96,17 @@ pub struct AppState {
     /// Multi-page in-memory LRU cache for rendered full-page PDFium bitmaps
     /// to avoid redundant page rasterization across tiles on active/split/adjacent pages.
     pub page_bitmap_cache: Mutex<PageBitmapLruCache>,
+    /// Memoized per-page text model (chars, lines, spans) so text selection,
+    /// span lookups and full-document search never re-parse the PDF.
+    pub page_text_cache: Mutex<HashMap<u32, Arc<inkwell_pdf::text::PageTextData>>>,
+    /// Number of in-flight visible-tile renders. Idle page prefetch checks this
+    /// and yields immediately so it can never stall a tile the user is waiting on.
+    pub active_tile_renders: std::sync::atomic::AtomicUsize,
     /// Pre-extracted page dimensions (width_pt, height_pt) for instant tile bounds calculation.
     pub page_dimensions: Mutex<HashMap<u32, (f64, f64)>>,
+    /// Snapshot of the on-disk (modified_time, file_len) of the open document.
+    /// Used to detect changes made by cloud sync or other applications.
+    pub doc_disk_stamp: Mutex<Option<(std::time::SystemTime, u64)>>,
     /// Multi-document session map for tab switching and isolation
     pub sessions: Mutex<HashMap<String, DocumentSession>>,
     pub active_session_id: Mutex<Option<String>>,
@@ -112,7 +123,10 @@ impl Default for AppState {
             wal: Mutex::new(None),
             pdfium: Mutex::new(None),
             page_bitmap_cache: Mutex::new(PageBitmapLruCache::new(16)),
+            page_text_cache: Mutex::new(HashMap::new()),
+            active_tile_renders: std::sync::atomic::AtomicUsize::new(0),
             page_dimensions: Mutex::new(HashMap::new()),
+            doc_disk_stamp: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
             active_session_id: Mutex::new(None),
             is_dirty: std::sync::atomic::AtomicBool::new(false),
@@ -120,6 +134,70 @@ impl Default for AppState {
     }
 }
 
+impl AppState {
+    /// Remember the current on-disk stamp for `path` so our own save/load can
+    /// never be reported back to the user as an external modification.
+    pub fn record_disk_stamp(&self, path: &std::path::Path) {
+        let stamp = disk_stamp_for(path);
+        if let Ok(mut guard) = self.doc_disk_stamp.lock() {
+            *guard = stamp;
+        }
+    }
 
+    /// Clear the tracked disk stamp (no document open).
+    pub fn clear_disk_stamp(&self) {
+        if let Ok(mut guard) = self.doc_disk_stamp.lock() {
+            *guard = None;
+        }
+    }
 
+    /// Drop every derived per-page cache (rasterized bitmaps + extracted text).
+    /// Must be called on document load, page insertion/deletion/rotation and
+    /// session switches so no stale page content can ever be served.
+    pub fn clear_page_caches(&self) {
+        if let Ok(mut cache) = self.page_bitmap_cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.page_text_cache.lock() {
+            cache.clear();
+        }
+    }
+}
 
+/// Current `(modified_time, file_len)` stamp for `path`, or `None` when the
+/// file is missing/unreadable. Used to detect out-of-band modifications.
+pub fn disk_stamp_for(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+#[cfg(test)]
+mod disk_stamp_tests {
+    use super::*;
+
+    #[test]
+    fn stamp_changes_when_the_file_is_modified_externally() {
+        let dir = std::env::temp_dir().join(format!("inkwell-stamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("document.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").expect("write");
+        let first = disk_stamp_for(&path).expect("first stamp");
+
+        std::fs::write(&path, b"%PDF-1.4\n% externally changed\n").expect("rewrite");
+        let second = disk_stamp_for(&path).expect("second stamp");
+        assert_ne!(first, second, "an external write must change the stamp");
+
+        // Stabilises once nothing else touches the file.
+        let third = disk_stamp_for(&path).expect("third stamp");
+        assert_eq!(second, third);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_files_have_no_stamp() {
+        let path = std::env::temp_dir().join("inkwell-definitely-missing-stamp.pdf");
+        let _ = std::fs::remove_file(&path);
+        assert!(disk_stamp_for(&path).is_none());
+    }
+}

@@ -44,6 +44,15 @@ The architecture is partitioned into:
 | F21 | Presentation Mode | Chrome-free fit-page stage with arrow paging, blank-screen cut, laser pointer and state restore | M4 | Plan 077 |
 | F22 | Lazy Thumbnail Rail | IntersectionObserver-gated canvas painting, image thumbnails, per-page annotation badges and true page counts | M4 | Plan 077 |
 | F23 | Interaction Polish | Persistent custom colour slots, shape routing for arrow/triangle, context-menu chrome guard, toast system v2, settings nesting fix | M4 | Plan 077 |
+| F24 | Instant PDF Open | Fast page-box API (~765 ms → ~1.6 ms for 33 pages), marker-gated sidecar parsing, memchr PDF scans, and idle prefetch of the next two page bitmaps | M5 | Plan 078 |
+| F25 | Non-Blocking Tile Compositor & Offscreen Dry Cache | Cached tiles blit synchronously per RAF (misses fetched in the background), clips hoisted per page, and page-sized offscreen `#dry` bitmaps make pan/scroll O(1) in annotation count | M6 | Plan 079 |
+| F26 | Incremental Wet-Stroke Chunking | Long strokes freeze into 32-point `Path2D` chunks on a device-space layer; each frame only re-tessellates a ~12-point tail. Evdev touchpad/trackpad devices are rejected as styluses | M6 | Plan 080 |
+| F27 | Zero-Copy Tile & Text Pipeline | Pre-normalized RGBA `Arc<Vec<u8>>` page cache, row-memcpy tile crops, prefetch yielding to visible tiles, and a backend page-text cache for selection/search | M6 | Plan 081 |
+| F28 | AABB Spatial Acceleration | Cached stroke bboxes for selection bounds, polygon/point AABB rejection in lasso and object picking, display-rate text-selection dragging | M6 | Plan 082 |
+| F29 | Hold-to-Snap Smart Shapes | 380 ms stationary dwell snaps a freehand stroke to a line, rectangle, ellipse or triangle, with Esc/continue-drawing revert and a settings toggle | M6 | Plan 083 |
+| F30 | Dual-Mode Vector Eraser | Whole-stroke erase plus a partial eraser that splits strokes into exact vector fragments around the eraser disc, as one atomic undo step | M6 | Plan 084 |
+| F31 | Smart PDF Export | All / annotated-only / current / custom page ranges with editable or flattened (read-only) vector output, without mutating the live session | M6 | Plan 085 |
+| F32 | External Change Guard | On-disk stamp tracking plus a non-destructive "changed on disk" banner whose reload keeps unsaved annotations | M6 | Plan 086 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -52,6 +61,8 @@ The architecture is partitioned into:
 | M2 | UI/UX & Touch Ergonomics Optimization | Touch target expansion (>=44x44px), CSS focus/toast polish, rendering latency hygiene (F13-F15) | M1 | DONE |
 | M3 | Comprehensive Verification & Smoke Suite | Expand `test_app_smoke.py` with spacebar, text selection, context menu checks; verify 100% test pass on Rust & desktop smoke tests (F16-F18) | M1, M2 | DONE |
 | M4 | Review, Signing, Presentation & Smoothness | Annotation review, signature/stamp studio, presentation mode, lazy thumbnails, interaction polish (F19-F23) | M1-M3 | DONE |
+| M5 | Instant Document Loading | Profiled and removed PDF open-path stalls; first page + adjacent-page prefetch (F24) | M1-M4 | DONE |
+| M6 | Extreme Smoothness & Evolution | Non-blocking compositor with offscreen dry cache, incremental wet-stroke chunking, zero-copy tile/text pipeline, AABB hit-testing, hold-to-snap shapes, partial vector eraser, smart PDF export and an external-change guard (F25-F32) | M1-M5 | DONE |
 
 ## Interface Contracts
 ### `toolManager` ↔ `state`

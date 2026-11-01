@@ -109,6 +109,8 @@ export const state = {
   // Transient Gesture / Interaction State
   cur: null,             // current in-progress Stroke instance
   isErasing: false,
+  eraserMode: 'stroke',  // 'stroke' (whole stroke) | 'partial' (segment split)
+  eraserRadius: 12,      // partial-eraser disc radius in points
   handDownPt: null,
   handStartWorldPt: null,
   shapeStart: null,
@@ -125,6 +127,11 @@ export const state = {
   laserTimer: null,
   laserPoints: [],
   streamline: null,
+
+  // Smart Ink — hold still at the end of a freehand stroke to snap to a shape
+  smartShapeHoldEnabled: localStorage.getItem('inkwell.smartShapeHold') !== '0',
+  holdSnappedShape: null,  // { kind, corners, anchor } while a snap preview is live
+  preSnapRawPts: null,     // raw samples kept for Esc / continue-drawing revert
 
   // Tabs & Multi-Document State
   activeTabId: null,

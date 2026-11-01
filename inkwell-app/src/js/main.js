@@ -43,8 +43,15 @@ export function getViewport() {
   return _viewport;
 }
 
-function handlePdfLoadResult(title, pathStr, res) {
-  if (!res) return;
+function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations = false } = {}) {
+  if (!res) { hideOpenProgress(); return; }
+  hideOpenProgress();
+  // Capture the live annotation lists BEFORE setDocument replaces them, so a
+  // non-destructive reload can keep every unsaved stroke/image/note.
+  const liveStrokes = preserveAnnotations ? (state.strokes || []).slice() : null;
+  const liveImages = preserveAnnotations ? (state.images || []).slice() : null;
+  const liveTexts = preserveAnnotations ? (state.textObjects || []).slice() : null;
+  const liveBookmarks = preserveAnnotations ? (state.bookmarks || []).slice() : null;
   const pageInfos = res.page_infos || (Array.isArray(res) ? res : []);
   const loadedStrokes = res.loaded_strokes || [];
   const loadedImages = res.loaded_images || [];
@@ -64,11 +71,17 @@ function handlePdfLoadResult(title, pathStr, res) {
 
   documentOps.setDocument({
     pageInfos,
-    strokes: loadedStrokes,
-    images: loadedImages,
-    textObjects: loadedTexts,
-    bookmarks,
+    strokes: liveStrokes || loadedStrokes,
+    images: liveImages || loadedImages,
+    textObjects: liveTexts || loadedTexts,
+    bookmarks: liveBookmarks || bookmarks,
   });
+
+  if (preserveAnnotations) {
+    // Kept annotations are by definition not yet on disk.
+    state.isDirty = true;
+    toolbar.updateSaveStatusUI('dirty');
+  }
 
   if (_viewport && pageInfos.length > 0) {
     _viewport.updateDocumentLayout(pageInfos);
@@ -111,15 +124,94 @@ function handlePdfLoadResult(title, pathStr, res) {
   setTimeout(warm, 200);
 }
 
+// ---- External file modification guard (cloud sync / other editors) ----
+
+function showExternalChangeBanner() {
+  const banner = $('externalChangeBanner');
+  if (!banner) return;
+  const title = $('externalChangeTitle');
+  const detail = $('externalChangeDetail');
+  const name = (state.currentDocPath || '').split(/[\\/]/).pop();
+  if (title) title.textContent = name ? `${name} changed on disk` : 'This PDF changed on disk';
+  if (detail) {
+    detail.textContent = state.isDirty
+      ? 'Another app or cloud sync updated the file. Your unsaved annotations are safe — reload keeps them.'
+      : 'Another app or cloud sync updated the file. Reload to pick up the new base pages.';
+  }
+  banner.classList.remove('hidden');
+}
+
+export function hideExternalChangeBanner() {
+  const banner = $('externalChangeBanner');
+  if (banner) banner.classList.add('hidden');
+}
+
+let _externalCheckBusy = false;
+
+/**
+ * Poll the backend for an out-of-band modification of the open file. Never
+ * reloads automatically: the user always gets the non-destructive banner first.
+ */
+export async function checkForExternalChanges() {
+  if (_externalCheckBusy) return false;
+  if (!ipc.getInvoke()) return false;
+  if (!state.currentDocPath || state.isSaving) return false;
+  if (typeof document !== 'undefined' && document.hidden) return false;
+  _externalCheckBusy = true;
+  try {
+    const changed = await ipc.checkExternalFileChange();
+    if (changed && state.currentDocPath) {
+      showExternalChangeBanner();
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn('[inkwell/main] external change check failed:', err);
+    return false;
+  } finally {
+    _externalCheckBusy = false;
+  }
+}
+
+/** Reload the on-disk PDF while keeping every unsaved session annotation. */
+export async function reloadExternalPdf() {
+  const path = state.currentDocPath;
+  if (!path) {
+    hideExternalChangeBanner();
+    return false;
+  }
+  showOpenProgress('Reloading updated PDF…');
+  try {
+    const res = await ipc.openPdf(path);
+    if (!res) {
+      toast.showToast('Could not reload the updated PDF from disk', 'error');
+      return false;
+    }
+    const title = path.split(/[\\/]/).pop();
+    handlePdfLoadResult(title, path, res, { preserveAnnotations: true });
+    hideExternalChangeBanner();
+    toast.showToast('Reloaded the updated PDF — unsaved annotations kept', 'success');
+    return true;
+  } catch (err) {
+    const msg = friendlyError(err);
+    if (msg) toast.showToast('Reload failed: ' + msg, 'error');
+    return false;
+  } finally {
+    hideOpenProgress();
+  }
+}
+
 async function openFileTrigger() {
   const invoke = ipc.getInvoke();
   if (invoke) {
+    showOpenProgress('Reading document…');
     try {
       const res = await ipc.openPdfDialog();
       if (res && res[0]) {
         const pathStr = res[0];
         const r = res[1] || {};
         const title = pathStr.split('\\').pop().split('/').pop();
+        showOpenProgress('Preparing page layout…');
         handlePdfLoadResult(title, pathStr, r);
         return;
       }
@@ -127,6 +219,8 @@ async function openFileTrigger() {
       if (e !== 'CANCELLED' && e !== 'No file selected') {
         console.warn('[inkwell] openPdfDialog failed, falling back to input:', e);
       }
+    } finally {
+      hideOpenProgress();
     }
   }
   $('pdfFileInput') && $('pdfFileInput').click();
@@ -140,6 +234,18 @@ export function friendlyError(e) {
     return e;
   }
   return (e && e.message) ? e.message : 'Unexpected error';
+}
+
+function showOpenProgress(message = 'Preparing page layout…') {
+  const overlay = $('openProgressOverlay');
+  const msg = $('openProgressMsg');
+  if (msg) msg.textContent = message;
+  if (overlay) overlay.classList.remove('hidden');
+}
+
+function hideOpenProgress() {
+  const overlay = $('openProgressOverlay');
+  if (overlay) overlay.classList.add('hidden');
 }
 
 async function createNewWhiteboard() {
@@ -170,6 +276,138 @@ function prepareAllImagesForSave() {
     .filter(Boolean);
   const nonDeletedImages = (state.images || []).filter(img => !img.deleted && (!img.id || (!img.id.startsWith('template_bg_') && !img.id.startsWith('img_template_bg_'))));
   return [...templateImages, ...nonDeletedImages];
+}
+
+/**
+ * Parse a user page-range specification into sorted, deduplicated 0-based page
+ * indices clamped to the document. Accepts "1-3, 5, 8-10" style input.
+ * @param {string} specStr
+ * @param {number} totalPages
+ * @returns {number[]}
+ */
+export function parsePageRangeSpec(specStr, totalPages) {
+  const total = Math.max(0, Number(totalPages) || 0);
+  if (typeof specStr !== 'string' || !specStr.trim()) return [];
+  const picked = new Set();
+  for (const rawPart of specStr.split(',')) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const match = part.match(/^(\d+)\s*(?:[-\u2013]\s*(\d+))?$/);
+    if (!match) continue;
+    let from = parseInt(match[1], 10);
+    let to = match[2] !== undefined ? parseInt(match[2], 10) : from;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+    if (from > to) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+    for (let page = from; page <= to; page++) {
+      const idx = page - 1;
+      if (idx >= 0 && idx < total) picked.add(idx);
+    }
+  }
+  return Array.from(picked).sort((a, b) => a - b);
+}
+
+/** Pages that actually carry user annotations (ink, images or text objects). */
+function computeAnnotatedPages() {
+  const sheets = new Set();
+  for (const s of (state.strokes || [])) {
+    if (!s.deleted) sheets.add(s.sheet || 0);
+  }
+  for (const img of (state.images || [])) {
+    if (img.deleted) continue;
+    if (img.id && (img.id.startsWith('template_bg_') || img.id.startsWith('img_template_bg_'))) continue;
+    sheets.add(img.sheet || 0);
+  }
+  for (const t of (state.textObjects || [])) {
+    if (!t.deleted) sheets.add(t.sheet || 0);
+  }
+  return Array.from(sheets).sort((a, b) => a - b);
+}
+
+function syncExportCustomInputVisibility() {
+  const sel = $('exportRangeMode');
+  const input = $('exportCustomRangeInput');
+  if (!sel || !input) return;
+  input.classList.toggle('hidden', sel.value !== 'custom');
+  if (sel.value === 'custom') {
+    input.setAttribute('aria-hidden', 'false');
+  } else {
+    input.setAttribute('aria-hidden', 'true');
+  }
+}
+
+/** Refresh the export modal's labels/hints when it opens or the filter changes. */
+function refreshExportModal() {
+  const total = (state.pageInfos || []).length || 1;
+  const annotated = computeAnnotatedPages();
+  const sel = $('exportRangeMode');
+  if (sel) {
+    const option = sel.querySelector('option[value="annotated"]');
+    if (option) option.textContent = `Annotated Pages Only (${annotated.length})`;
+    const currentOption = sel.querySelector('option[value="current"]');
+    if (currentOption) currentOption.textContent = `Current Page Only (${(state.leftSheet || 0) + 1})`;
+  }
+  const hint = $('exportRangeHint');
+  if (hint) {
+    hint.textContent = `${total} page${total === 1 ? '' : 's'} in this document · ${annotated.length} annotated`;
+  }
+  syncExportCustomInputVisibility();
+}
+
+/** Export the document to a new file without touching the live session. */
+async function exportPdfWithDialog({ selectedPages = null, flatten = false } = {}) {
+  try {
+    state.isSaving = true;
+    toolbar.updateSaveStatusUI('saving');
+    const imagesToSave = prepareAllImagesForSave();
+    await ipc.exportPdfCustom({
+      selectedPages,
+      flatten,
+      strokes: state.strokes,
+      images: imagesToSave,
+      texts: state.textObjects,
+    });
+    toolbar.updateSaveStatusUI(state.isDirty ? 'dirty' : 'saved');
+    toast.showToast(
+      flatten ? 'Flattened read-only PDF exported' : 'PDF copy exported successfully',
+      'success',
+    );
+    return true;
+  } catch (e) {
+    const msg = friendlyError(e);
+    if (msg && msg !== 'CANCELLED') toast.showToast('Export failed: ' + msg, 'error');
+    toolbar.updateSaveStatusUI(state.isDirty ? 'dirty' : 'saved');
+    return false;
+  } finally {
+    state.isSaving = false;
+  }
+}
+
+/** Apply the smart-export controls and dispatch the export. */
+async function exportWithSelectedOptions() {
+  const totalPages = (state.pageInfos || []).length || 1;
+  const mode = $('exportRangeMode') ? $('exportRangeMode').value : 'all';
+  let selectedPages = null;
+
+  if (mode === 'current') {
+    selectedPages = [state.leftSheet || 0];
+  } else if (mode === 'annotated') {
+    selectedPages = computeAnnotatedPages();
+  } else if (mode === 'custom') {
+    selectedPages = parsePageRangeSpec($('exportCustomRangeInput') ? $('exportCustomRangeInput').value : '', totalPages);
+  }
+
+  if (Array.isArray(selectedPages) && selectedPages.length === 0) {
+    toast.showToast('No pages match the selected export filter', 'warning');
+    return false;
+  }
+
+  const flatten = !!($('exportFlattenCheckbox') && $('exportFlattenCheckbox').checked);
+  $('exportModal') && $('exportModal').classList.add('hidden');
+  return exportPdfWithDialog({ selectedPages, flatten });
 }
 
 function openInsertPageModal() {
@@ -259,21 +497,9 @@ function registerCoreCommands() {
     title: 'Export As New Copy...',
     category: 'File',
     shortcut: 'Ctrl+Shift+S',
-    execute: async () => {
-      try {
-        state.isSaving = true;
-        toolbar.updateSaveStatusUI('saving');
-        const imagesToSave = prepareAllImagesForSave();
-        await ipc.savePdf(null, state.strokes, imagesToSave, state.textObjects);
-        toolbar.updateSaveStatusUI('saved');
-        toast.showToast('Document exported successfully', 'success');
-      } catch (e) {
-        const msg = friendlyError(e);
-        if (msg) toast.showToast('Export failed: ' + msg, 'error');
-      } finally {
-        state.isSaving = false;
-      }
-    },
+    // Non-destructive: writes a copy through the export pipeline, so the live
+    // document path, base bytes, WAL and dirty flag are left untouched.
+    execute: () => exportPdfWithDialog({ selectedPages: null, flatten: false }),
   });
 
   reg.register({
@@ -865,15 +1091,20 @@ function bindAllUIEvents() {
       try {
         const filePath = file.path || file.webkitRelativePath;
         if (filePath) {
+          showOpenProgress('Reading document…');
           const r = await ipc.openPdf(filePath);
+          showOpenProgress('Preparing page layout…');
           handlePdfLoadResult(file.name, filePath, r);
           return;
         }
         const buf = await file.arrayBuffer();
         const bytes = Array.from(new Uint8Array(buf));
+        showOpenProgress('Reading document…');
         const r2 = await ipc.openPdfBytes(file.name, bytes);
+        showOpenProgress('Preparing page layout…');
         handlePdfLoadResult(file.name, null, r2);
       } catch (err) {
+        hideOpenProgress();
         const msg = friendlyError(err);
         if (msg) toast.showToast('Failed to open PDF: ' + msg, 'error');
       }
@@ -968,6 +1199,61 @@ function bindAllUIEvents() {
   $('inputCustomZoom') && $('inputCustomZoom').addEventListener('keydown', e => {
     if (e.key === 'Enter') applyCustomZoom();
   });
+
+  // Smart Ink: hold-to-snap shape recognition
+  const smartShapeToggle = $('cSmartShapeHold');
+  if (smartShapeToggle) {
+    smartShapeToggle.checked = state.smartShapeHoldEnabled !== false;
+    smartShapeToggle.addEventListener('change', () => {
+      state.smartShapeHoldEnabled = smartShapeToggle.checked;
+      try {
+        localStorage.setItem('inkwell.smartShapeHold', smartShapeToggle.checked ? '1' : '0');
+      } catch (_) {}
+    });
+  }
+
+  // Smart PDF export controls (range filter + flatten)
+  const exportRangeMode = $('exportRangeMode');
+  if (exportRangeMode) {
+    exportRangeMode.addEventListener('change', () => {
+      syncExportCustomInputVisibility();
+      const input = $('exportCustomRangeInput');
+      if (input && exportRangeMode.value === 'custom') input.focus();
+    });
+  }
+  const exportConfirmBtn = $('exportConfirmBtn');
+  if (exportConfirmBtn) {
+    exportConfirmBtn.addEventListener('click', () => { exportWithSelectedOptions(); });
+  }
+  $('btnHeaderExport') && $('btnHeaderExport').addEventListener('click', refreshExportModal);
+  const exportRangeInput = $('exportCustomRangeInput');
+  if (exportRangeInput) {
+    exportRangeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        exportWithSelectedOptions();
+      }
+    });
+  }
+
+  // External file change guard (cloud sync / other editors)
+  const reloadExternalBtn = $('btnReloadExternalPdf');
+  if (reloadExternalBtn) {
+    reloadExternalBtn.addEventListener('click', () => { reloadExternalPdf(); });
+  }
+  const dismissExternalBtn = $('btnDismissExternalChange');
+  if (dismissExternalBtn) {
+    dismissExternalBtn.addEventListener('click', () => { hideExternalChangeBanner(); });
+  }
+  window.addEventListener('focus', () => { checkForExternalChanges(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkForExternalChanges();
+  });
+  // Cloud clients can rewrite the file while the window stays focused, so poll
+  // a cheap metadata stamp every 30 s (skipped while hidden or saving).
+  if (typeof setInterval === 'function') {
+    setInterval(() => { checkForExternalChanges(); }, 30000);
+  }
 
   // Autosave delay setting
   const selAutosave = $('selectAutosaveDelay');
@@ -1268,14 +1554,19 @@ function bindAllUIEvents() {
       try {
         const filePath = file.path;
         if (filePath) {
+          showOpenProgress('Reading document…');
           const r = await ipc.openPdf(filePath);
+          showOpenProgress('Preparing page layout…');
           handlePdfLoadResult(file.name, filePath, r);
           return;
         }
         const buf = await file.arrayBuffer();
+        showOpenProgress('Reading document…');
         const r2 = await ipc.openPdfBytes(file.name, Array.from(new Uint8Array(buf)));
+        showOpenProgress('Preparing page layout…');
         handlePdfLoadResult(file.name, null, r2);
       } catch (err) {
+        hideOpenProgress();
         const msg = friendlyError(err);
         if (msg) toast.showToast('Failed to open dropped PDF: ' + msg, 'error');
       }
@@ -1446,6 +1737,35 @@ function attachPointerHandlers(wetCanvas) {
     const r = compositor.getStageRect() || (stageEl ? stageEl.getBoundingClientRect() : wetCanvas.getBoundingClientRect());
     const wx = _viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
     return { ptWorld: wx, pane, screenPt: [e.clientX - r.left, e.clientY - r.top] };
+  }
+
+  // Extend an active text selection to the pointer's current character. Kept
+  // out of the raw-input loop: this is character-distance scanning + a full
+  // redraw, so it belongs on display-aligned pointermove events only.
+  function handleTextSelectDrag(ptWorld) {
+    if (!_viewport) return;
+    if (state.isSelectingText && state.textSelectAnchor) {
+      const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
+      const anchor = state.textSelectAnchor;
+      const targetSheet = pageCoord.sheet;
+      textSelection.ensurePageTextData(targetSheet).then(() => {
+        const hit = textSelection.findCharAndOffsetAtPageCoord(targetSheet, pageCoord.px, pageCoord.py, { maxDist: 48 });
+        if (hit) {
+          state.textSelection = textSelection.computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex, targetSheet);
+          if (state.textSelection) state.selectedTextString = state.textSelection.text;
+          compositor.redrawAll();
+        }
+      });
+    } else if (state.textSelectPending && state.textSelectPending.isDown) {
+      const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
+      state.textSelectPending.px = pageCoord.px;
+      state.textSelectPending.py = pageCoord.py;
+    }
+  }
+
+  function isTextSelectTool() {
+    const t = state.activeTool || 'pen';
+    return t === 'textSelect' || t === 'textselect';
   }
 
   function handleCanvasContextMenu(e) {
@@ -1656,6 +1976,10 @@ function attachPointerHandlers(wetCanvas) {
       return;
     }
     const tool = state.activeTool || 'pen';
+    // Text selection is display-rate work (character scanning + full redraw):
+    // ignore high-frequency raw samples and let the pointermove listener below
+    // drive it once per displayed frame.
+    if (e.type === 'pointerrawupdate' && (tool === 'textSelect' || tool === 'textselect')) return;
     const coalesced = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
     const events = (coalesced && coalesced.length) ? coalesced : [e];
 
@@ -1697,26 +2021,22 @@ function attachPointerHandlers(wetCanvas) {
       } else if (tool === 'laser') {
         laserTool.onLaserMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'textSelect' || tool === 'textselect') {
-        if (state.isSelectingText && state.textSelectAnchor) {
-          const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
-          const anchor = state.textSelectAnchor;
-          const targetSheet = pageCoord.sheet;
-          textSelection.ensurePageTextData(targetSheet).then(() => {
-            const hit = textSelection.findCharAndOffsetAtPageCoord(targetSheet, pageCoord.px, pageCoord.py, { maxDist: 48 });
-            if (hit) {
-              state.textSelection = textSelection.computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex, targetSheet);
-              if (state.textSelection) state.selectedTextString = state.textSelection.text;
-              compositor.redrawAll();
-            }
-          });
-        } else if (state.textSelectPending && state.textSelectPending.isDown) {
-          const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
-          state.textSelectPending.px = pageCoord.px;
-          state.textSelectPending.py = pageCoord.py;
-        }
+        handleTextSelectDrag(ptWorld);
       }
     }
   });
+
+  // Display-aligned text-selection drags. `pointerrawupdate` fires far more
+  // often than the compositor paints, so text selection runs here instead.
+  if (moveEvt === 'pointerrawupdate') {
+    wetCanvas.addEventListener('pointermove', e => {
+      if (!isTextSelectTool()) return;
+      if (e.pointerType === 'touch' && _viewport && (_viewport.isPinching || _viewport.gestureOccurred || (_viewport.activeTouches && _viewport.activeTouches.size >= 2))) return;
+      if (!state.isSelectingText && !(state.textSelectPending && state.textSelectPending.isDown)) return;
+      const { ptWorld } = localXY(e);
+      handleTextSelectDrag(ptWorld);
+    });
+  }
 
   wetCanvas.addEventListener('pointerup', e => {
     if (e.pointerType === 'touch' && _viewport && (_viewport.isPinching || _viewport.gestureOccurred || (_viewport.activeTouches && _viewport.activeTouches.size >= 2))) {
@@ -1914,6 +2234,14 @@ function attachKeyboardShortcuts() {
           return;
         }
       }
+      // Esc before lifting the pen reverts a Hold-to-Snap preview to freehand.
+      if (state.holdSnappedShape && penTool.revertHoldSnap) {
+        if (penTool.revertHoldSnap(_viewport)) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       const propPop = $('propPopover');
       if (propPop && !propPop.classList.contains('hidden')) {
         toolbar.hidePropPopover();
@@ -2188,6 +2516,14 @@ window.addEventListener('DOMContentLoaded', async () => {
           }
         }
       }
+      // Fragments created by a partial erase must be withdrawn from the journal.
+      for (const f of (data.addedStrokes || [])) {
+        if (f && f.id) {
+          ipc.deleteStroke(f.id).catch(err => {
+            console.warn('[inkwell/main] undo_erase_strokes deleteStroke (fragment) error:', err);
+          });
+        }
+      }
     } else if (type === 'redo_add_stroke') {
       if (data.stroke) {
         const s = data.stroke;
@@ -2203,6 +2539,14 @@ window.addEventListener('DOMContentLoaded', async () => {
               console.warn('[inkwell/main] redo_erase_strokes deleteStroke error:', err);
             });
           }
+        }
+      }
+      // Re-apply the split fragments that the original erase produced.
+      for (const f of (data.addedStrokes || [])) {
+        if (f) {
+          ipc.commitStroke(f.sheet ?? 0, f.kind || 'pen', f.rgb, f.base_width || f.baseWidth || 1.6, f.points, f.id).catch(err => {
+            console.warn('[inkwell/main] redo_erase_strokes commitStroke (fragment) error:', err);
+          });
         }
       }
     } else if (type === 'undo_add_image' || type === 'redo_delete_image') {
@@ -2375,6 +2719,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.redo = () => commandsModule.commands.execute('edit.redo');
   window.showToast = toast.showToast;
   window.forceCloseWindow = () => ipc.invokeTauri('force_close_window');
+  window.parsePageRangeSpec = parsePageRangeSpec;
+  window.checkForExternalChanges = checkForExternalChanges;
+  window.reloadExternalPdf = reloadExternalPdf;
+  window.showExternalChangeBanner = showExternalChangeBanner;
+  window.hideExternalChangeBanner = hideExternalChangeBanner;
+  window.exportPdfWithDialog = exportPdfWithDialog;
+  window.exportWithSelectedOptions = exportWithSelectedOptions;
   window.scheduleRedrawTiles = compositor.scheduleRedrawTiles;
   window.scheduleRedrawAll = compositor.scheduleRedrawAll;
   window.redrawAll = compositor.redrawAll;
@@ -2406,12 +2757,16 @@ window.addEventListener('DOMContentLoaded', async () => {
       const initFile = await ipc.invokeTauri('get_initial_file');
       if (initFile) {
         console.log('[inkwell] Opening initial file from CLI:', initFile);
+        showOpenProgress('Reading document…');
         const r = await ipc.openPdf(initFile);
         const title = initFile.split('\\').pop().split('/').pop();
+        showOpenProgress('Preparing page layout…');
         handlePdfLoadResult(title, initFile, r);
+        hideOpenProgress();
         return;
       }
     } catch (e) {
+      hideOpenProgress();
       console.warn('[inkwell] Failed to check initial file:', e);
     }
     // Auto-initialize a blank note on startup if no document is loaded

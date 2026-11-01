@@ -436,9 +436,30 @@ function selectObjectsInPolygon(polygon, viewport) {
   const selectedImages = [];
   const selectedTexts = [];
 
+  // Lasso-polygon world AABB: reject whole strokes in O(1) before the O(V)
+  // ray-casting test, which previously ran for every point of every stroke in
+  // the entire document on each lasso release.
+  let polyMinX = Infinity, polyMinY = Infinity, polyMaxX = -Infinity, polyMaxY = -Infinity;
+  for (let i = 0; i < polygon.length; i++) {
+    const px = polygon[i][0], py = polygon[i][1];
+    if (px < polyMinX) polyMinX = px;
+    if (py < polyMinY) polyMinY = py;
+    if (px > polyMaxX) polyMaxX = px;
+    if (py > polyMaxY) polyMaxY = py;
+  }
+
   for (const s of (state.strokes || [])) {
     if (s.deleted) continue;
     const pl = viewport.getPageLayout(s.sheet || 0);
+    if (!s.bbox && window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+      s.bbox = window.Ink.computeStrokeBbox(s.points || s._pts || [], s.base_width);
+    }
+    if (s.bbox) {
+      if (pl.x + s.bbox[2] < polyMinX || pl.x + s.bbox[0] > polyMaxX ||
+          pl.y + s.bbox[3] < polyMinY || pl.y + s.bbox[1] > polyMaxY) {
+        continue;
+      }
+    }
     const pts = s.points || s._pts || [];
     for (const pt of pts) {
       const wx = pl.x + pt.x;
@@ -520,9 +541,19 @@ export function findObjectAtWorld(wx, wy, viewport, radius = 10) {
   }
 
   // 3. Strokes
+  const px = wx - pl.x;
+  const py = wy - pl.y;
   for (let i = (state.strokes || []).length - 1; i >= 0; i--) {
     const s = state.strokes[i];
     if (s.deleted || s.sheet !== targetSheet) continue;
+    if (!s.bbox && window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+      s.bbox = window.Ink.computeStrokeBbox(s.points || s._pts || [], s.base_width);
+    }
+    const pad = radius + (s.base_width || 4);
+    if (s.bbox && (px < s.bbox[0] - pad || px > s.bbox[2] + pad ||
+                   py < s.bbox[1] - pad || py > s.bbox[3] + pad)) {
+      continue;
+    }
     const pts = s.points || s._pts || [];
     if (!pts.length) continue;
 

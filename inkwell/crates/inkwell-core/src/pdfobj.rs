@@ -324,17 +324,19 @@ pub fn find_object(d: &[u8], num: u32) -> Option<(usize, usize)> {
 }
 
 pub fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if needle.is_empty() || hay.len() < needle.len() {
+    if needle.is_empty() || hay.len() < needle.len() || from >= hay.len() {
         return None;
     }
-    (from..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
+    // memchr's SIMD substring search is dramatically faster than a naive
+    // byte-by-byte iterator on multi-megabyte PDFs (especially in debug builds).
+    ::memchr::memmem::find(&hay[from..], needle).map(|p| from + p)
 }
 
 pub fn rfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;
     }
-    (0..=hay.len() - needle.len()).rev().find(|&i| &hay[i..i + needle.len()] == needle)
+    ::memchr::memmem::rfind(hay, needle)
 }
 
 /// Byte offset stored in the final `startxref`.

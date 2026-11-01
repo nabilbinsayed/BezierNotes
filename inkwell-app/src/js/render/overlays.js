@@ -13,6 +13,23 @@ export function getSelectionBounds(state, viewport) {
     for (const s of state.selectedStrokes) {
       if (s.deleted) continue;
       const pl = viewport.getPageLayout(s.sheet || 0);
+      // O(1) cached AABB (page-local) — the per-point scan below is only a
+      // fallback for strokes that somehow never got a bbox computed.
+      if (!s.bbox && typeof window !== 'undefined' && window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+        s.bbox = window.Ink.computeStrokeBbox(s.points || s._pts || [], s.base_width);
+      }
+      if (s.bbox && Number.isFinite(s.bbox[0])) {
+        const wx0 = pl.x + s.bbox[0];
+        const wy0 = pl.y + s.bbox[1];
+        const wx1 = pl.x + s.bbox[2];
+        const wy1 = pl.y + s.bbox[3];
+        minX = Math.min(minX, wx0);
+        minY = Math.min(minY, wy0);
+        maxX = Math.max(maxX, wx1);
+        maxY = Math.max(maxY, wy1);
+        hasItems = true;
+        continue;
+      }
       const halfW = (s.base_width || 2) / 2;
       for (const pt of s.points) {
         const w = (pt.w !== undefined ? pt.w / 2 : halfW) || halfW;

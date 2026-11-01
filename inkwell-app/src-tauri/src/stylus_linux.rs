@@ -64,6 +64,8 @@ const EVIOCGNAME_256: std::os::raw::c_ulong = 0x80ff4506;
 #[cfg(target_os = "linux")]
 const EVIOCGBIT_EV_ABS: std::os::raw::c_ulong = 0x80084523; // EV_ABS = 3
 #[cfg(target_os = "linux")]
+const EVIOCGBIT_EV_KEY: std::os::raw::c_ulong = 0x80404521; // EV_KEY = 1, 64-byte bitmap
+#[cfg(target_os = "linux")]
 const EVIOCGABS_PRESSURE: std::os::raw::c_ulong = 0x80184558; // 0x40 + ABS_PRESSURE (0x18) = 0x58
 #[cfg(target_os = "linux")]
 const EVIOCSCLOCKID: std::os::raw::c_ulong = 0x400445a0; // Set evdev clock domain
@@ -144,6 +146,50 @@ struct TargetDevice {
     max_pressure: i32,
 }
 
+/// Device names that are never a pressure-sensitive pen tablet, even though
+/// several of them (Synaptics/Elan touchpads especially) do expose an
+/// ABS_PRESSURE axis for finger force. Streaming those as a "stylus" replaces
+/// real pen input with ~0.1 pressure finger samples at 120 Hz.
+fn is_non_stylus_device_name(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    const REJECT: [&str; 9] = [
+        "touchpad",
+        "trackpad",
+        "clickpad",
+        "synaptics",
+        "trackpoint",
+        "pointing stick",
+        "glidepoint",
+        "touch bar",
+        "mouse",
+    ];
+    REJECT.iter().any(|needle| name_lower.contains(needle))
+}
+
+/// Brand-aware confidence score for a candidate device name.
+fn score_device_name(name: &str) -> i32 {
+    let name_lower = name.to_lowercase();
+    if name_lower.contains("opentabletdriver") || name_lower.contains("virtual artist") {
+        100
+    } else if name_lower.contains("huion") || name_lower.contains("256c:006d") {
+        90
+    } else if name_lower.contains("wacom")
+        || name_lower.contains("xp-pen")
+        || name_lower.contains("xencelabs")
+        || name_lower.contains("gaomon")
+        || name_lower.contains("ugtablet")
+        || name_lower.contains("ugee")
+        || name_lower.contains("stylus")
+        || name_lower.contains("pentablet")
+    {
+        80
+    } else if name_lower.contains("pen") {
+        65
+    } else {
+        50
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn get_kernel_monotonic_us() -> u64 {
     let mut ts = KernelTimespec {
@@ -212,17 +258,22 @@ fn discover_best_tablet(has_permission_denied: &mut bool) -> Option<TargetDevice
             max_p = 65535;
         }
 
-        // 4. Score device
+        // 4. Reject non-stylus hardware outright and score the rest
         let name_lower = name.to_lowercase();
-        let mut score = 50;
-        if name_lower.contains("opentabletdriver") || name_lower.contains("virtual artist") {
-            score = 100;
-        } else if name_lower.contains("huion") || name_lower.contains("256c:006d") {
-            score = 90;
-        } else if name_lower.contains("wacom") || name_lower.contains("xp-pen") || name_lower.contains("gaomon") || name_lower.contains("ugtablet") {
-            score = 80;
-        } else if name_lower.contains("synaptics") || name_lower.contains("touchpad") || name_lower.contains("trackpad") {
-            score = 10;
+        if is_non_stylus_device_name(&name_lower) {
+            continue;
+        }
+        let score = score_device_name(&name_lower);
+
+        // 5. Require a real pen tool unless the name is a known tablet brand.
+        //    Generic touchscreens expose ABS_PRESSURE for fingers but no
+        //    BTN_TOOL_PEN, and must never be mistaken for a pressure stylus.
+        let mut key_bits = [0u8; 64];
+        let key_ret = unsafe { ioctl(fd, EVIOCGBIT_EV_KEY, key_bits.as_mut_ptr()) };
+        // BTN_TOOL_PEN (0x140 = 320) -> byte 40, bit 0
+        let has_pen_key = key_ret >= 0 && (key_bits[40] & 0x01) != 0;
+        if !has_pen_key && score < 60 {
+            continue;
         }
 
         candidates.push(TargetDevice {
@@ -424,4 +475,56 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
 #[cfg(not(target_os = "linux"))]
 pub fn spawn_stylus_worker(_channel: Channel<StylusMessage>, _is_running: Arc<AtomicBool>) {
     // No-op on Windows/macOS where PointerEvent pressure is natively supported.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touchpad_and_synaptics_names_are_rejected() {
+        for name in [
+            "synps/2 synaptics touchpad",
+            "elan touchpad",
+            "apple internal trackpad",
+            "alps touchpad",
+            "clickpad",
+            "tpPS/2 IBM TrackPoint",
+            "logitech usb mouse",
+            "generic pointing stick",
+        ] {
+            assert!(
+                is_non_stylus_device_name(name),
+                "expected {name:?} to be rejected as a non-stylus device"
+            );
+        }
+    }
+
+    #[test]
+    fn pen_tablet_names_are_accepted() {
+        for name in [
+            "wacom intuos pro m pen",
+            "huion kamvas 13 pen",
+            "xp-pen artist 12",
+            "ugee m708",
+            "gaomon pd1161",
+            "opentabletdriver virtual artist",
+            "xencelabs pen tablet",
+        ] {
+            assert!(
+                !is_non_stylus_device_name(name),
+                "expected {name:?} to be accepted as a pen tablet"
+            );
+        }
+    }
+
+    #[test]
+    fn brand_scoring_outranks_generic_devices() {
+        assert_eq!(score_device_name("opentabletdriver virtual artist"), 100);
+        assert_eq!(score_device_name("huion kamvas 13 pen"), 90);
+        assert!(score_device_name("wacom cintiq 16") >= 80);
+        assert!(score_device_name("xp-pen deco mini7") >= 80);
+        // Unrecognised chipsets must score below the pen-key threshold (60).
+        assert!(score_device_name("hid 256c:006e") < 60);
+    }
 }

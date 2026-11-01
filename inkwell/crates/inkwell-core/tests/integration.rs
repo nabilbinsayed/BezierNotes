@@ -280,6 +280,34 @@ fn sidecar_survives_the_pdf_round_trip() {
 }
 
 #[test]
+fn flattened_export_is_read_only_but_still_standard_vector_pdf() {
+    let mut f = PdfFile::open(fixture()).unwrap();
+    let doc = sample_doc(6);
+    f.write_document_flattened(&doc, pdf::DEFAULT_GROUP).unwrap();
+    let out = f.finish();
+
+    // No editable sidecar / private catalog markers survive a flattened export.
+    assert_eq!(count(&out, b"/Inkw_Doc"), 0, "flattened PDF must not be editable");
+    assert_eq!(count(&out, b"/EmbeddedFiles"), 0);
+    assert!(matches!(pdf::read_sidecar(&out).unwrap(), SidecarStatus::Absent));
+
+    // But the annotation layer is still real, standards-compliant vector content.
+    assert!(count(&out, b"/Subtype /Ink") >= 1, "flattened PDF must keep vector ink");
+    assert!(count(&out, b"/AP <<") >= 1, "flattened ink needs an appearance stream");
+    assert!(count(&out, b"/T (Inkwell)") >= 1, "annotations must stay labelled");
+}
+
+#[test]
+fn flattened_export_still_preserves_the_original_bytes() {
+    let orig = fixture();
+    let mut f = PdfFile::open(orig.clone()).unwrap();
+    f.write_document_flattened(&sample_doc(4), pdf::DEFAULT_GROUP).unwrap();
+    let out = f.finish();
+    assert_eq!(&out[..orig.len()], &orig[..], "flattened export must stay append-only");
+    assert!(out.ends_with(b"%%EOF\n"));
+}
+
+#[test]
 fn multiple_generations_do_not_duplicate_our_objects() {
     // gen 1
     let mut f = PdfFile::open(fixture()).unwrap();
@@ -1221,5 +1249,17 @@ fn status_name(s: &SidecarStatus) -> String {
         SidecarStatus::Absent => "Absent".into(),
         SidecarStatus::Corrupt(e) => format!("Corrupt({e})"),
         SidecarStatus::Stale(_) => "Stale".into(),
+    }
+}
+
+#[test]
+fn clean_pdf_sidecar_lookup_short_circuits_without_parsing_the_trailer() {
+    // A plain PDF has no /Inkw_Doc marker. Opening a multi-megabyte textbook
+    // should not walk its trailer/object table looking for a sidecar that
+    // cannot exist; the marker check returns Absent before any parsing.
+    let bytes = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n";
+    match pdf::read_sidecar(bytes).expect("sidecar probe must not fail") {
+        SidecarStatus::Absent => {}
+        other => panic!("expected Absent for a clean PDF, got {}", status_name(&other)),
     }
 }

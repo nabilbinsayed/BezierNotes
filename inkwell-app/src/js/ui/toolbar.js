@@ -56,6 +56,17 @@ export function updateToolbarUI() {
   const activeBtn = toolButtonMap[activeTool];
   if (activeBtn) activeBtn.classList.add('active');
 
+  const eraserBtn = $('btnDockEraser');
+  if (eraserBtn) {
+    const partial = state.eraserMode === 'partial';
+    eraserBtn.title = partial
+      ? 'Eraser — Partial split (click to switch to whole stroke)'
+      : 'Eraser — Whole stroke (click to switch to partial split)';
+    eraserBtn.setAttribute('aria-label', eraserBtn.title);
+    eraserBtn.setAttribute('data-eraser-mode', state.eraserMode);
+    eraserBtn.classList.toggle('eraser-partial', partial);
+  }
+
   // Update legacy buttons if present
   const legacyMap = {
     pen: $('btnPen'),
@@ -153,6 +164,34 @@ export function updateUndoRedoUI() {
   }
 }
 
+/**
+ * Cycle the eraser between whole-stroke and partial (segment-splitting) erase.
+ * Bound to a second click on the already-active eraser button.
+ */
+export function toggleEraserMode() {
+  state.eraserMode = state.eraserMode === 'partial' ? 'stroke' : 'partial';
+  const partial = state.eraserMode === 'partial';
+  const btn = $('btnDockEraser');
+  if (btn) {
+    btn.title = partial
+      ? 'Eraser — Partial split (click to switch to whole stroke)'
+      : 'Eraser — Whole stroke (click to switch to partial split)';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('data-eraser-mode', state.eraserMode);
+    btn.classList.toggle('eraser-partial', partial);
+  }
+  const wet = typeof document !== 'undefined' ? document.getElementById('wet') : null;
+  if (wet) wet.classList.toggle('eraser-partial', partial);
+  emit('toast', {
+    message: partial
+      ? 'Eraser: Partial split — erases only where you touch'
+      : 'Eraser: Whole stroke — erases the entire stroke',
+    type: 'info',
+  });
+  emit('toolPropertyChanged', { eraserMode: state.eraserMode });
+  return state.eraserMode;
+}
+
 function bindDockButtons() {
   // Dock Tool Buttons
   $('btnDockPan') && $('btnDockPan').addEventListener('click', () => {
@@ -185,7 +224,7 @@ function bindDockButtons() {
 
   $('btnDockEraser') && $('btnDockEraser').addEventListener('click', () => {
     if (state.activeTool === 'eraser') {
-      togglePropPopover();
+      toggleEraserMode();
     } else {
       toolManager.setTool('eraser');
       updateToolbarUI();
@@ -522,6 +561,11 @@ function bindModals() {
   if (btnExportNew) {
     const triggerExport = () => {
       $('exportModal')?.classList.add('hidden');
+      // Honour the range/flatten controls above the option cards.
+      if (typeof window.exportWithSelectedOptions === 'function') {
+        window.exportWithSelectedOptions();
+        return;
+      }
       commandsModule.commands.execute('file.exportPdf');
     };
     btnExportNew.addEventListener('click', triggerExport);

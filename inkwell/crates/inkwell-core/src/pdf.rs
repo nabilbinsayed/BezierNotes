@@ -212,7 +212,7 @@ impl PdfFile {
 
     /// Write `doc` into the file as a new incremental generation.
     pub fn write_document(&mut self, document: &Document, group: usize) -> Result<()> {
-        self.write_document_with_boxes(document, group, None)
+        self.write_document_inner(document, group, None, false)
     }
 
     /// Write `doc` into the file with optional authoritative explicit page boxes.
@@ -222,8 +222,26 @@ impl PdfFile {
         group: usize,
         explicit_boxes: Option<&std::collections::HashMap<usize, [f64; 4]>>,
     ) -> Result<()> {
+        self.write_document_inner(document, group, explicit_boxes, false)
+    }
+
+    /// Write a **flattened** (read-only) export: every annotation is still a
+    /// standards-compliant vector object, but the editable InkWell sidecar and
+    /// `/Inkw_*` catalog markers are omitted, so re-opening the file cannot
+    /// resurrect (or accidentally erase) the source ink geometry.
+    pub fn write_document_flattened(&mut self, document: &Document, group: usize) -> Result<()> {
+        self.write_document_inner(document, group, None, true)
+    }
+
+    fn write_document_inner(
+        &mut self,
+        document: &Document,
+        group: usize,
+        explicit_boxes: Option<&std::collections::HashMap<usize, [f64; 4]>>,
+        flatten: bool,
+    ) -> Result<()> {
         let group = group.max(1);
-        let sidecar_raw = doc::encode_sidecar(document);
+        let sidecar_raw = if flatten { Vec::new() } else { doc::encode_sidecar(document) };
         let hash = Sha256::digest(&sidecar_raw);
 
         // ---- Layer 1 + 2, per sheet ------------------------------------
@@ -284,6 +302,11 @@ impl PdfFile {
                 }
             }
             self.rewrite_page(page_num, &annots)?;
+        }
+
+        if flatten {
+            // Read-only export: no embedded sidecar, no editable markers.
+            return Ok(());
         }
 
         // ---- Layer 3 ----------------------------------------------------
@@ -849,6 +872,12 @@ pub enum SidecarStatus {
 
 pub fn read_sidecar(bytes: &[u8]) -> Result<SidecarStatus> {
     let d = bytes;
+    // Fast path for the overwhelming majority of PDFs: a clean document has no
+    // Inkwell catalog key, so skip the trailer/object walk entirely. This keeps
+    // first-open responsive on multi-megabyte files.
+    if ::memchr::memmem::find(d, b"/Inkw_Doc").is_none() {
+        return Ok(SidecarStatus::Absent);
+    }
     let tr = po::last_trailer_dict(d)?;
     let root = po::dict_get(d, tr, "/Root")
         .and_then(|r| po::as_ref_num(d, r))

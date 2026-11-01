@@ -81,6 +81,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 - **Append-Only Incremental Save:** Inkwell preserves the original PDF bytes, appending updated xref tables and objects so base documents are never corrupted in-place.
 - **Temp-Dir WAL Crash Durability:** System temporary directory Write-Ahead Logging (`inkwell-wal`) commits every stroke with immediate `fsync`, effortlessly recovering unsaved work after crashes without thrashing cloud sync folders.
 - **Hierarchical Table of Contents & Bookmarks:** Recursive PDF outline extraction with collapsible tree navigation and direct page jumps.
+- **Instant Page Loading:** Page boxes are read with PDFium's fast `FPDF_GetPageSizeByIndexF` API (a 33-page textbook dropped from ~765 ms to ~1.6 ms of metadata work), clean PDFs skip sidecar parsing entirely, and the next two page bitmaps are prefetched in the background so scrolling does not wait on rasterization.
 - **Annotation Review & Audit (`Ctrl+Shift+A`):** Page-grouped list of every ink stroke, highlight, text note, image, signature and stamp with type filters, full-text search, click-to-jump selection, undoable delete, and one-click Markdown summary export for Obsidian, Notion or email.
 - **Signature & Stamp Studio (`I`):** Draw or type a signature in a bundled handwriting face (Caveat, OFL), or drop a professional stamp (Approved, Reviewed, Draft, Confidential, Paid, Void, Received, today's Date). Marks are inserted as native PDF images, saved locally for reuse, and stay fully undoable.
 - **Chrome-Free Presentation Mode (`F5`):** Fit-and-centre the active page on a black stage with auto-dimming controls, arrow-key paging, a blank-screen cut (`B`) and the laser pointer, restoring your previous zoom, pan and tool on exit.
@@ -146,8 +147,9 @@ InkWell/
 |---|---|---|
 | **Fountain Pen** | `P` | Pressure-sensitive analogue vector pen |
 | **Highlighter** | `M` | Chisel-tip translucent rectangular highlighter |
-| **Precision Eraser** | `E` | Proximity stroke eraser across continuous pages |
+| **Precision Eraser** | `E` | Whole-stroke eraser; click `E` again for partial vector splitting |
 | **Lasso / Move Tool** | `V` | Freeform polygon loop, click-to-select, drag-to-move, 8-handle resize |
+| **Smart Shapes (Hold-to-Snap)** | hold still ~0.4 s | Snap a freehand stroke into a line, rectangle, ellipse or triangle (`Esc` reverts) |
 | **Rectangle Shape** | `R` | Vector rectangle shape |
 | **Ellipse Shape** | `O` | Vector ellipse / circle shape |
 | **Line / Ruler** | `L` | Straight ruler line segment |
@@ -166,6 +168,7 @@ InkWell/
 | **New Notebook** | `Ctrl` + `N` | Create a fresh blank digital notebook PDF |
 | **Open PDF Document** | `Ctrl` + `O` | Open an existing PDF via file picker |
 | **Save Document** | `Ctrl` + `S` | Incrementally save ink layers, text, and images |
+| **Export Copy** | `Ctrl` + `Shift` + `S` | Non-destructive copy with page ranges and optional flattening |
 | **Command Palette** | `Ctrl` + `K` / `Ctrl` + `Shift` + `P` | Global quick search and command launcher |
 | **Toggle Split View** | `Ctrl` + `\` | Toggle dual-pane side-by-side study mode |
 | **Toggle Sidebar** | `Ctrl` + `B` | Open/close navigation drawer |
@@ -181,23 +184,23 @@ InkWell/
 Inkwell is in active development with a verified baseline across all core subsystems. Here is an honest accounting of our current state and upcoming architectural milestones:
 
 ### ✅ Production-Ready & Verified
-- **Vector Inking Pipeline:** High-speed wet/dry canvas separation, sub-pixel pressure curves, and $C^1$ Bézier polygon generation.
-- **PDFium Tile Cache:** Smooth LOD on-demand tile rasterization with zero underlay rasterization on load.
+- **Vector Inking Pipeline:** High-speed wet/dry canvas separation, sub-pixel pressure curves, and $C^1$ Bézier polygon generation. Long strokes freeze into incremental `Path2D` chunks with a cached prefix bitmap, so wet-ink cost stays flat regardless of stroke length.
+- **PDFium Tile Cache:** Smooth LOD on-demand tile rasterization with zero underlay rasterization on load, plus per-page offscreen `#dry` bitmaps that make panning/zooming independent of annotation count.
 - **WAL Durability:** Low-overhead transaction journal in system temp storage; automatic crash recovery for committed strokes.
 - **Incremental PDF Writing:** Non-destructive append-only PDF output compliant with standard readers.
 - **Split-View Study Mode:** Independent pan and zoom across dual document viewports.
 - **Continuous Layout & Text Selection:** Seamless multi-page scrolling, hierarchical TOC outline, and accurate character-range selection.
 - **Review, Signing & Presentation:** Annotation audit drawer with Markdown export, native PDF signature/stamp insertion, and a chrome-free presentation stage.
+- **Smart Ink & Precision Erasing:** 380 ms hold-to-snap recognition for lines, rectangles, ellipses and triangles, plus a dual-mode eraser that splits strokes into true vector fragments.
+- **Smart PDF Export & Cloud-Sync Guard:** Export all/annotated/current/custom page ranges as editable or flattened read-only vector PDFs, and get a non-destructive reload banner when a synced file changes underneath the session.
+- **Lossless Media Round-Trip:** Ink strokes, sticky notes and pasted images all round-trip through the embedded Layer 3 sidecar, so re-opening a saved document restores fully editable objects.
 
 ### 🚧 In Active Development / Next Up
-1. **Full Layer 3 Sidecar Serialization for All Media:**
-   - *Current limitation:* Ink strokes round-trip losslessly through the embedded sidecar, but sticky notes and pasted images are embedded directly into the base PDF streams via PDFium.
-   - *Next step:* Expand the Layer 3 sidecar schema to serialize text notes and images alongside ink strokes, enabling full re-selection, resizing, and editing across save/reopen cycles.
-2. **Cloud Sync Conflict Protection:**
-   - Integrate a native file-system watcher to monitor open PDF files for external modifications (e.g. Syncthing, Dropbox, or OneDrive updates) and display non-destructive reload/merge alerts before autosaving.
-3. **Parametric Vector Shapes:**
+1. **Parametric Vector Shapes:**
    - Upgrade shape tools from high-density stroke approximations into first-class parametric geometric entities with editable corner radiuses, endpoints, and stroke weights.
-4. **Future Research (Infinite Canvas):**
+2. **AcroForm Field Filling:**
+   - Existing form widgets render (and can be flattened) correctly, but InkWell does not yet let you type into them as a form-aware editor would.
+3. **Future Research (Infinite Canvas):**
    - The primary focus is rock-solid stability for the paginated digital notebook workflow. True unbounded spatial whiteboards with automatic PDF page tiling remain on the long-term exploratory roadmap.
 
 ---

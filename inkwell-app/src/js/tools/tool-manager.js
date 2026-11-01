@@ -87,8 +87,12 @@ export function resolvePressure(e) {
   const now = performance.now();
   const isNativeRecent = (now - lastNativeSampleTime) < 350;
 
-  // 1. Native Linux evdev hardware tablet stream
-  if (isNativeRecent && (liveNativeDown || liveNativePressure > 0.001)) {
+  // 1. Native Linux evdev hardware tablet stream. Only trust it for pen-like
+  // pointers (or a genuine tip-down contact) so a device that merely exposes
+  // ABS_PRESSURE — e.g. a Synaptics touchpad — can never hijack mouse pressure.
+  const pointerType = e && e.pointerType;
+  const nativeApplies = !pointerType || pointerType === 'pen' || liveNativeDown;
+  if (isNativeRecent && nativeApplies && (liveNativeDown || liveNativePressure > 0.001)) {
     state.pressureSource = 'native';
     state.lastPointerType = liveNativeTool;
     const p = Math.max(0.04, Math.min(1.0, liveNativePressure));
