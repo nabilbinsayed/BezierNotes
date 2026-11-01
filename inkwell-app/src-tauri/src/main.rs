@@ -13,7 +13,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-        "--disable-features=CalculateNativeWinOcclusion,TouchpadOverscrollHistoryNavigation \
+        "--disable-features=CalculateNativeWinOcclusion,TouchpadOverscrollHistoryNavigation,OverscrollHistoryNavigation \
          --enable-features=CanvasOopRasterization \
          --enable-gpu-rasterization \
          --enable-zero-copy \
@@ -101,7 +101,9 @@ fn main() {
                                 let state = window_clone.state::<AppState>();
                                 let _ = state.wal.lock().map(|mut g| {
                                     if let Some(tx) = g.take() {
-                                        let _ = tx.send(crate::state::WalOp::Close);
+                                        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+                                        let _ = tx.send(crate::state::WalOp::Discard(Some(ack_tx)));
+                                        let _ = ack_rx.recv_timeout(std::time::Duration::from_millis(500));
                                     }
                                 });
                                 window_clone.app_handle().exit(0);

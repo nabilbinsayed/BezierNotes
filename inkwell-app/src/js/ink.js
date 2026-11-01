@@ -54,7 +54,7 @@ class Streamline {
     this.lastVy = 0;
   }
 
-  filter(x, y, p) {
+  filter(x, y, p, zoom = 1.0) {
     if (this.curX === null) {
       this.curX = x;
       this.curY = y;
@@ -67,26 +67,13 @@ class Streamline {
     const dx = x - this.curX;
     const dy = y - this.curY;
     const dist = Math.hypot(dx, dy);
+    const screenDist = dist * Math.max(0.25, zoom);
 
-    // Corner / turn preservation: if direction turns sharply (>75 deg),
-    // snap immediately to preserve apex vertex with 100% geometric accuracy.
     const lastDist = Math.hypot(this.lastVx, this.lastVy);
-    if (dist > 0.3 && lastDist > 0.3) {
-      const cosAngle = (dx * this.lastVx + dy * this.lastVy) / (dist * lastDist);
-      if (cosAngle < 0.25) {
-        this.curX = x;
-        this.curY = y;
-        this.curP = p;
-        this.lastVx = dx;
-        this.lastVy = dy;
-        return { x: this.curX, y: this.curY, p: this.curP };
-      }
-    }
-
-    // Dynamic velocity response:
-    // When writing cursive or quick strokes (dist > 2.5px), lerp opens to 1.0 (zero lag)
-    // When drawing slow/deliberate lines, lerp stabilizes against digitizer tremor and staircase noise
-    const dynamicLerp = Math.min(1.0, Math.max(this.positionLerp, this.positionLerp + dist * 0.08));
+    const turnBoost = (dist > 0.3 && lastDist > 0.3)
+      ? Math.max(0, (0.5 - ((dx * this.lastVx + dy * this.lastVy) / (dist * lastDist))) * 0.35)
+      : 0;
+    const dynamicLerp = Math.min(1.0, Math.max(this.positionLerp, this.positionLerp + screenDist * 0.08 + turnBoost));
     this.curX += dx * dynamicLerp;
     this.curY += dy * dynamicLerp;
     this.curP += (p - this.curP) * this.pressureLerp;
@@ -447,10 +434,11 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
       const nx = n0.nx + n1.nx;
       const ny = n0.ny + n1.ny;
       const l = Math.hypot(nx, ny);
-      if (l < 1e-4 || dot < -0.2) {
+      if (l < 1e-4 || dot < -0.35) {
         norm = n0;
       } else {
-        norm = { nx: nx / l, ny: ny / l };
+        const miter = Math.min(1.6, 1.0 / Math.max(0.5, l * 0.5));
+        norm = { nx: (nx / l) * miter, ny: (ny / l) * miter };
       }
     } else if (i === 0) {
       norm = segNormals[0];
@@ -463,10 +451,11 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
       const nx = n0.nx + n1.nx;
       const ny = n0.ny + n1.ny;
       const l = Math.hypot(nx, ny);
-      if (l < 1e-4 || dot < -0.2) {
+      if (l < 1e-4 || dot < -0.35) {
         norm = n0;
       } else {
-        norm = { nx: nx / l, ny: ny / l };
+        const miter = Math.min(1.6, 1.0 / Math.max(0.5, l * 0.5));
+        norm = { nx: (nx / l) * miter, ny: (ny / l) * miter };
       }
     }
 
@@ -534,6 +523,10 @@ function getPath2D(stroke) {
   if (typeof Path2D === 'undefined') return null;
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return null;
+
+  if (stroke.kind === 'chisel' || stroke.tool === 'chisel') {
+    return getChiselPath2D(rawPts, stroke.base_width || stroke.baseWidth || 16.0);
+  }
 
   const path = new Path2D();
   const baseW = stroke.base_width || stroke.baseWidth || (stroke.kind === 'highlighter' ? 16.0 : 2.0);
@@ -706,7 +699,7 @@ function drawStroke(ctx, stroke) {
     ctx.globalAlpha = 0.42;
   }
 
-  ctx.fillStyle = stroke.cssColor || `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  ctx.fillStyle = stroke.cssColor || (Array.isArray(stroke.rgb) ? `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})` : (stroke.color || '#141724'));
 
   if ((!stroke._cachedPath2D || !(stroke._cachedPath2D instanceof Path2D)) && typeof Path2D !== 'undefined') {
     stroke._cachedPath2D = getPath2D(stroke);

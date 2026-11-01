@@ -226,31 +226,98 @@ export function drawShapeOverlay(ctx, state, viewport, dpr, pane = 'left', clipP
   if (!ctx || !state || !state.shapeStart || !state.shapeEnd || !viewport) return;
   const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1], pane);
   const [sx1, sy1] = viewport.worldToScreen(state.shapeEnd[0], state.shapeEnd[1], pane);
+  const z = (pane === 'right' && viewport.splitMode) ? (viewport.rightZoom || viewport.zoom) : viewport.zoom;
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(dpr, dpr);
   if (typeof clipPaneFn === 'function') clipPaneFn(ctx, pane);
 
-  const color = `rgb(${state.color.map(v => Math.round(v * 255)).join(',')})`;
+  const color = state.color ? `rgb(${state.color.map(v => Math.round(v * 255)).join(',')})` : '#141724';
   ctx.strokeStyle = color;
-  ctx.lineWidth = state.baseWidth || 1.6;
+  ctx.fillStyle = color;
+  ctx.lineWidth = (state.baseWidth || 1.6) * z;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.setLineDash([]);
   ctx.beginPath();
 
-  if (state.shapeKind === 'rect') {
+  const kind = state.shapeKind || 'rect';
+
+  if (kind === 'rect') {
     ctx.rect(sx0, sy0, sx1 - sx0, sy1 - sy0);
-  } else if (state.shapeKind === 'ellipse') {
+    ctx.stroke();
+  } else if (kind === 'ellipse') {
     ctx.ellipse((sx0 + sx1) / 2, (sy0 + sy1) / 2,
                 Math.abs(sx1 - sx0) / 2, Math.abs(sy1 - sy0) / 2, 0, 0, Math.PI * 2);
-  } else if (state.shapeKind === 'line') {
+    ctx.stroke();
+  } else if (kind === 'triangle') {
+    ctx.moveTo((sx0 + sx1) / 2, sy0);
+    ctx.lineTo(sx1, sy1);
+    ctx.lineTo(sx0, sy1);
+    ctx.closePath();
+    ctx.stroke();
+  } else if (kind === 'line' || kind === 'ruler') {
     ctx.moveTo(sx0, sy0);
     ctx.lineTo(sx1, sy1);
+    ctx.stroke();
+  } else if (kind === 'arrow') {
+    ctx.moveTo(sx0, sy0);
+    ctx.lineTo(sx1, sy1);
+    ctx.stroke();
+
+    // Arrowhead wings at sx1, sy1
+    const angle = Math.atan2(sy1 - sy0, sx1 - sx0);
+    const arrowLen = Math.max(10, (state.baseWidth || 1.6) * z * 4.5);
+    const wingAngle = 28 * Math.PI / 180;
+    const ax1 = sx1 - arrowLen * Math.cos(angle - wingAngle);
+    const ay1 = sy1 - arrowLen * Math.sin(angle - wingAngle);
+    const ax2 = sx1 - arrowLen * Math.cos(angle + wingAngle);
+    const ay2 = sy1 - arrowLen * Math.sin(angle + wingAngle);
+
+    ctx.beginPath();
+    ctx.moveTo(sx1, sy1);
+    ctx.lineTo(ax1, ay1);
+    ctx.lineTo(ax2, ay2);
+    ctx.closePath();
+    ctx.fill();
   }
 
-  ctx.stroke();
+  // Draw crisp angle and length pill HUD for straightedge/ruler/arrow/line
+  if (kind === 'ruler' || kind === 'line' || kind === 'arrow') {
+    const wdx = state.shapeEnd[0] - state.shapeStart[0];
+    const wdy = state.shapeEnd[1] - state.shapeStart[1];
+    const lengthPt = Math.hypot(wdx, wdy);
+    let angleDeg = (Math.atan2(wdy, wdx) * 180 / Math.PI);
+    if (angleDeg < 0) angleDeg += 360;
+
+    const midX = (sx0 + sx1) / 2;
+    const midY = (sy0 + sy1) / 2;
+    const pillText = `${angleDeg.toFixed(1)}° • ${Math.round(lengthPt)}pt`;
+
+    ctx.font = '600 11px Inter, system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const metrics = ctx.measureText(pillText);
+    const pw = metrics.width + 16;
+    const ph = 22;
+    const px = midX - pw / 2;
+    const py = midY - ph / 2 - 16;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(20, 23, 36, 0.88)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(px, py, pw, ph, 11) : ctx.rect(px, py, pw, ph);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(pillText, midX, py + ph / 2);
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -262,6 +329,13 @@ export function drawLaserPointer(ctx, state, viewport, dpr, pane = 'left') {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(dpr, dpr);
+
+  if (viewport.splitMode && typeof viewport.getPaneBounds === 'function') {
+    const b = viewport.getPaneBounds(pane);
+    ctx.beginPath();
+    ctx.rect(b.x, b.y, b.width, b.height);
+    ctx.clip();
+  }
 
   for (let i = 0; i < state.laserPoints.length; i++) {
     const pt = state.laserPoints[i];

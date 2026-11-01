@@ -735,10 +735,11 @@ pub fn ribbon_edges(s: &Stroke) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
             let nx = n0.0 + n1.0;
             let ny = n0.1 + n1.1;
             let l = nx.hypot(ny);
-            if l < 1e-4 || dot < -0.2 {
+            if l < 1e-4 || dot < -0.35 {
                 n0
             } else {
-                (nx / l, ny / l)
+                let miter = (1.0 / (l * 0.5).max(0.5)).min(1.6);
+                (nx / l * miter, ny / l * miter)
             }
         } else if i == 0 {
             seg_normals[0]
@@ -751,10 +752,11 @@ pub fn ribbon_edges(s: &Stroke) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
             let nx = n0.0 + n1.0;
             let ny = n0.1 + n1.1;
             let l = nx.hypot(ny);
-            if l < 1e-4 || dot < -0.2 {
+            if l < 1e-4 || dot < -0.35 {
                 n0
             } else {
-                (nx / l, ny / l)
+                let miter = (1.0 / (l * 0.5).max(0.5)).min(1.6);
+                (nx / l * miter, ny / l * miter)
             }
         };
 

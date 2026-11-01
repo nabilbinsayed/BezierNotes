@@ -345,7 +345,7 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
  * Pastes an image given its Data URL onto the specified page.
  * Automatically computes proportional dimensions and centers at target point or page center.
  */
-export async function pasteImageDataUrl(dataUrl, activeSheet = 0, targetPagePt = null, customId = null) {
+export async function pasteImageDataUrl(dataUrl, activeSheet = 0, targetPagePt = null, customId = null, options = {}) {
   if (!dataUrl || typeof dataUrl !== 'string') return null;
 
   // 1. Decode HTMLImageElement to obtain natural dimensions
@@ -364,13 +364,15 @@ export async function pasteImageDataUrl(dataUrl, activeSheet = 0, targetPagePt =
   const pageW = pi.width_pt || 595;
   const pageH = pi.height_pt || 842;
 
-  // Screen pixels to PDF points is ~0.75
-  let w = naturalW * 0.75;
-  let h = naturalH * 0.75;
+  // Screen pixels to PDF points is ~0.75. Callers inserting signatures or
+  // stamps can request a document-relative preferred width instead.
+  const preferredWidth = Number(options.widthPt) > 0 ? Number(options.widthPt) : null;
+  let w = preferredWidth ? preferredWidth : naturalW * 0.75;
+  let h = preferredWidth ? preferredWidth * (naturalH / Math.max(1, naturalW)) : naturalH * 0.75;
 
-  // Fit within 75% of page width & height
-  const maxW = pageW * 0.75;
-  const maxH = pageH * 0.75;
+  // Fit within 75% of page width & height (or caller-specified caps)
+  const maxW = Number(options.maxWidthPt) > 0 ? Number(options.maxWidthPt) : pageW * 0.75;
+  const maxH = Number(options.maxHeightPt) > 0 ? Number(options.maxHeightPt) : pageH * 0.75;
   if (w > maxW || h > maxH) {
     const scale = Math.min(maxW / w, maxH / h);
     w *= scale;
@@ -408,6 +410,9 @@ export async function pasteImageDataUrl(dataUrl, activeSheet = 0, targetPagePt =
     data_url: dataUrl,
     _el: imgEl,
     deleted: false,
+    kind: options.kind || undefined,
+    label: options.label || undefined,
+    createdAt: Date.now(),
   };
 
   documentOps.upsertImage(newImage, { recordHistory: true, isNew: true });

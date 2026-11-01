@@ -71,6 +71,9 @@ export function getStageRect() {
 }
 
 export function paneBounds(pane = 'left') {
+  if (_viewport && typeof _viewport.getPaneBounds === 'function') {
+    return _viewport.getPaneBounds(pane);
+  }
   const stageEl = (typeof document !== 'undefined') ? document.getElementById('stage') : null;
   const r = stageEl ? stageEl.getBoundingClientRect() : (_stageRect || { width: 800, height: 600 });
   const width = r.width > 0 ? r.width : 800;
@@ -87,6 +90,9 @@ export function visiblePanes() {
 export function paneForEvent(e) {
   const stageEl = (typeof document !== 'undefined') ? document.getElementById('stage') : null;
   const r = _stageRect || (stageEl ? stageEl.getBoundingClientRect() : { left: 0, width: window.innerWidth });
+  if (_viewport && typeof _viewport.paneAtScreenX === 'function') {
+    return _viewport.paneAtScreenX(e.clientX - r.left);
+  }
   return _viewport && _viewport.splitMode && (e.clientX - r.left > r.width / 2) ? 'right' : 'left';
 }
 
@@ -150,31 +156,42 @@ export function scheduleRedrawTiles() {
   });
 }
 
+export function getTilesEpoch() {
+  return _redrawTilesEpoch;
+}
+
 export async function redrawTiles() {
   if (!_tctx || !_tilesCanvas || !_viewport) return;
   const drawEpoch = ++_redrawTilesEpoch;
   _tctx.setTransform(1, 0, 0, 1, 0, 0);
   _tctx.clearRect(0, 0, _tilesCanvas.width, _tilesCanvas.height);
 
-  for (const pane of visiblePanes()) {
+  const panes = visiblePanes();
+  for (const pane of panes) {
     const visiblePages = _viewport.getVisiblePages(pane);
     for (const pl of visiblePages) {
       const pi = state.pageInfos && state.pageInfos[pl.sheet];
       templates.drawPageBackground(_tctx, pl, _viewport, pi, state.dpr, pane);
     }
-    if (visiblePages.length) {
-      const bounds = paneBounds(pane);
-      await Promise.all(visiblePages.map(pl => {
-        const pi = state.pageInfos[pl.sheet];
-        return pi ? tiles.redrawTilesForPage(_tctx, pane, pi, pl, _viewport, state.dpr, bounds, clipToPane) : Promise.resolve();
-      }));
-      if (drawEpoch !== _redrawTilesEpoch) {
-        return; // Stale render superseded by a newer draw request; drop
-      }
-    }
   }
 
-  overlays.drawZoomIndicator(_tctx, _viewport, state.dpr, visiblePanes(), paneBounds);
+  const isCurrentEpoch = () => drawEpoch === _redrawTilesEpoch;
+  await Promise.all(panes.map(async pane => {
+    const visiblePages = _viewport.getVisiblePages(pane);
+    if (!visiblePages.length) return;
+    const bounds = paneBounds(pane);
+    await Promise.all(visiblePages.map(pl => {
+      const pi = state.pageInfos && state.pageInfos[pl.sheet];
+      return pi
+        ? tiles.redrawTilesForPage(_tctx, pane, pi, pl, _viewport, state.dpr, bounds, clipToPane, isCurrentEpoch)
+        : Promise.resolve();
+    }));
+  }));
+  if (!isCurrentEpoch()) return;
+
+  if (!state.presentationMode) {
+    overlays.drawZoomIndicator(_tctx, _viewport, state.dpr, visiblePanes(), paneBounds);
+  }
   tiles.evictTileCache();
 }
 
@@ -217,7 +234,9 @@ export function redrawAll() {
         templates.drawPageTemplateGuidelines(_dctx, pi.template, pl.width, pl.height);
       }
 
-      // 1. Embedded images
+      // 1. Embedded images (rendered with clean source-over, never multiplied)
+      _dctx.globalCompositeOperation = 'source-over';
+      _dctx.globalAlpha = 1.0;
       if (state.images && state.images.length) {
         for (const img of state.images) {
           if (!img.deleted && img.sheet === pl.sheet) {
@@ -241,10 +260,38 @@ export function redrawAll() {
         }
       }
 
-      // 2. Direct in-place text objects
+      const sheetStrokes = (window.Ink && typeof window.Ink.drawStroke === 'function')
+        ? documentOps.getStrokesForSheet(pl.sheet)
+        : [];
+      const pageW = pl.width;
+      const pageH = pl.height;
+
+      // 2. Optical highlighter strokes (drawn below text and opaque ink with multiply)
+      for (const s of sheetStrokes) {
+        if (s.deleted || s.kind !== 'highlighter') continue;
+        if (s.bbox) {
+          const margin = s.base_width || 16;
+          if (
+            s.bbox[2] < -margin ||
+            s.bbox[0] > pageW + margin ||
+            s.bbox[3] < -margin ||
+            s.bbox[1] > pageH + margin
+          ) {
+            continue;
+          }
+        }
+        window.Ink.drawStroke(_dctx, s);
+      }
+
+      // 3. Direct in-place text objects (source-over, crisp and legible)
+      _dctx.globalCompositeOperation = 'source-over';
+      _dctx.globalAlpha = 1.0;
       if (state.textObjects && state.textObjects.length) {
         for (const t of state.textObjects) {
           if (!t.deleted && t.sheet === pl.sheet && t.text) {
+            if (state.transformMode && (state.selectedTextObjects || []).some(st => String(st.id) === String(t.id))) {
+              continue;
+            }
             _dctx.save();
             _dctx.fillStyle = t.color || '#141724';
             const weight = t.bold ? 'bold ' : '';
@@ -262,26 +309,23 @@ export function redrawAll() {
         }
       }
 
-      // 3. Vector ink strokes with sheet indexing and bbox culling
-      if (window.Ink && typeof window.Ink.drawStroke === 'function') {
-        const sheetStrokes = documentOps.getStrokesForSheet(pl.sheet);
-        const pageW = pl.width;
-        const pageH = pl.height;
-        for (const s of sheetStrokes) {
-          if (s.deleted) continue;
-          if (s.bbox) {
-            const margin = s.base_width || 4;
-            if (
-              s.bbox[2] < -margin ||
-              s.bbox[0] > pageW + margin ||
-              s.bbox[3] < -margin ||
-              s.bbox[1] > pageH + margin
-            ) {
-              continue; // Bbox lies completely outside visible page bounds
-            }
+      // 4. Opaque vector ink strokes (source-over on top of text and highlighters)
+      _dctx.globalCompositeOperation = 'source-over';
+      _dctx.globalAlpha = 1.0;
+      for (const s of sheetStrokes) {
+        if (s.deleted || s.kind === 'highlighter') continue;
+        if (s.bbox) {
+          const margin = s.base_width || 4;
+          if (
+            s.bbox[2] < -margin ||
+            s.bbox[0] > pageW + margin ||
+            s.bbox[3] < -margin ||
+            s.bbox[1] > pageH + margin
+          ) {
+            continue;
           }
-          window.Ink.drawStroke(_dctx, s);
         }
+        window.Ink.drawStroke(_dctx, s);
       }
 
       _dctx.restore();
@@ -294,7 +338,7 @@ export function redrawAll() {
   overlays.drawSearchHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
 
   // Draw selection / lasso overlay on wet layer
-  overlays.drawSelectionOverlay(_wctx, state, _viewport, state.dpr, state.drawingPane || 'left');
+  overlays.drawSelectionOverlay(_wctx, state, _viewport, state.dpr, state.activePane || state.drawingPane || 'left');
 }
 
 export function drawCommittedStroke(stroke) {

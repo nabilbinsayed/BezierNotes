@@ -821,6 +821,53 @@ fn test_pdf_file_incremental_save_with_images_and_text() {
 }
 
 #[test]
+fn image_and_text_annots_carry_inkwell_creator_tag() {
+    let mut f = PdfFile::open(fixture()).unwrap();
+    let mut doc = Document::for_pdf(1);
+
+    doc.push_image(0, inkwell_core::doc::ImageObject {
+        id: "img_creator_test".to_string(),
+        sheet: 0,
+        x: 50.0,
+        y: 50.0,
+        width: 100.0,
+        height: 100.0,
+        data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+    });
+
+    doc.upsert_text(0, inkwell_core::doc::TextObject {
+        id: "txt_creator_test".to_string(),
+        sheet: 0,
+        x: 60.0,
+        y: 200.0,
+        text: "Creator tag test note".to_string(),
+        font_size: 14.0,
+        color: "#111111".to_string(),
+        bold: false,
+        italic: false,
+        width: 150.0,
+        height: 40.0,
+    });
+
+    f.write_document(&doc, 64).unwrap();
+    let bytes = f.finish();
+
+    let stamp_pos = inkwell_core::pdfobj::find(&bytes, b"/Subtype /Stamp", 0).expect("stamp annot");
+    let stamp_slice = &bytes[stamp_pos..stamp_pos + 250.min(bytes.len() - stamp_pos)];
+    assert!(
+        inkwell_core::pdfobj::find(stamp_slice, b"/T (Inkwell)", 0).is_some(),
+        "Stamp annot must carry /T (Inkwell)"
+    );
+
+    let text_pos = inkwell_core::pdfobj::find(&bytes, b"/Subtype /FreeText", 0).expect("text annot");
+    let text_slice = &bytes[text_pos..text_pos + 250.min(bytes.len() - text_pos)];
+    assert!(
+        inkwell_core::pdfobj::find(text_slice, b"/T (Inkwell)", 0).is_some(),
+        "FreeText annot must carry /T (Inkwell)"
+    );
+}
+
+#[test]
 fn test_transparent_image_smask_generation() {
     let mut doc = Document::for_pdf(1);
     let img_buf = image::RgbaImage::from_raw(2, 2, vec![
@@ -1013,6 +1060,145 @@ fn test_annotation_layering_order_preserves_ink_visibility() {
     assert!(a1.contains("user_diagram_1"), "1st annotation must be user image, got: {a1}");
     assert!(a2.contains("/Subtype /Ink"), "2nd annotation must be vector ink stroke (drawn on top of images), got: {a2}");
     assert!(a3.contains("/Subtype /FreeText"), "3rd annotation must be text annotation, got: {a3}");
+}
+
+#[test]
+fn test_cross_sheet_move_deduplication() {
+    let mut doc = Document::for_pdf(2);
+    let img = inkwell_core::doc::ImageObject {
+        id: "img_test_1".to_string(),
+        sheet: 0,
+        x: 10.0,
+        y: 20.0,
+        width: 100.0,
+        height: 100.0,
+        data_url: "data:image/png;base64,abc".to_string(),
+    };
+    doc.push_image(0, img.clone());
+    assert_eq!(doc.sheets[0].images.len(), 1);
+    assert_eq!(doc.sheets[1].images.len(), 0);
+
+    // Move to sheet 1
+    doc.push_image(1, img);
+    assert_eq!(doc.sheets[0].images.len(), 0, "Image must be removed from sheet 0 on cross-sheet move");
+    assert_eq!(doc.sheets[1].images.len(), 1, "Image must be present on sheet 1");
+
+    let txt = inkwell_core::doc::TextObject {
+        id: "txt_test_1".to_string(),
+        sheet: 0,
+        x: 50.0,
+        y: 60.0,
+        text: "Note 1".to_string(),
+        font_size: 14.0,
+        color: "#000000".to_string(),
+        bold: false,
+        italic: false,
+        width: 80.0,
+        height: 20.0,
+    };
+    doc.upsert_text(0, txt.clone());
+    assert_eq!(doc.sheets[0].text_objects.len(), 1);
+    assert_eq!(doc.sheets[1].text_objects.len(), 0);
+
+    // Move to sheet 1
+    doc.upsert_text(1, txt);
+    assert_eq!(doc.sheets[0].text_objects.len(), 0, "Text must be removed from sheet 0 on cross-sheet move");
+    assert_eq!(doc.sheets[1].text_objects.len(), 1, "Text must be present on sheet 1");
+}
+
+#[test]
+fn test_bookmarks_roundtrip_sidecar_and_pdf() {
+    let mut doc = Document::for_pdf(3);
+    doc.bookmarks = vec![
+        inkwell_core::doc::Bookmark {
+            id: "bm_1".to_string(),
+            page: 0,
+            label: "Chapter 1".to_string(),
+            created_at: 1000,
+        },
+        inkwell_core::doc::Bookmark {
+            id: "bm_2".to_string(),
+            page: 2,
+            label: "Chapter 3".to_string(),
+            created_at: 2000,
+        },
+    ];
+
+    let mut f = PdfFile::open(fixture()).unwrap();
+    f.write_document(&doc, pdf::DEFAULT_GROUP).unwrap();
+    let bytes = f.finish();
+
+    match pdf::read_sidecar(&bytes).unwrap() {
+        SidecarStatus::Ok(loaded_doc) => {
+            assert_eq!(loaded_doc.bookmarks.len(), 2);
+            assert_eq!(loaded_doc.bookmarks[0].label, "Chapter 1");
+            assert_eq!(loaded_doc.bookmarks[0].page, 0);
+            assert_eq!(loaded_doc.bookmarks[1].label, "Chapter 3");
+            assert_eq!(loaded_doc.bookmarks[1].page, 2);
+        }
+        other => panic!("Expected SidecarStatus::Ok, got: {}", status_name(&other)),
+    }
+}
+
+#[test]
+fn test_duplicate_page_distinct_ids() {
+    let mut doc = Document::for_pdf(1);
+    let stroke = synth(1001, 10.0, 5, ToolKind::Pen);
+    doc.push_stroke(0, stroke);
+    doc.push_image(0, inkwell_core::doc::ImageObject {
+        id: "orig_img_1".to_string(),
+        sheet: 0,
+        x: 10.0,
+        y: 10.0,
+        width: 50.0,
+        height: 50.0,
+        data_url: "data:image/png;base64,123".to_string(),
+    });
+    doc.upsert_text(0, inkwell_core::doc::TextObject {
+        id: "orig_txt_1".to_string(),
+        sheet: 0,
+        x: 20.0,
+        y: 20.0,
+        text: "Note".to_string(),
+        font_size: 16.0,
+        color: "#000000".to_string(),
+        bold: false,
+        italic: false,
+        width: 100.0,
+        height: 30.0,
+    });
+
+    let dup_idx = doc.duplicate_sheet(0).expect("duplicate sheet");
+    assert_eq!(dup_idx, 1);
+    assert_eq!(doc.sheets.len(), 2);
+
+    let s0_stroke_id = doc.sheets[0].strokes().next().unwrap().id;
+    let s1_stroke_id = doc.sheets[1].strokes().next().unwrap().id;
+    assert_ne!(s0_stroke_id, s1_stroke_id, "Cloned stroke must have distinct ID");
+
+    let s0_img_id = &doc.sheets[0].images[0].id;
+    let s1_img_id = &doc.sheets[1].images[0].id;
+    assert_ne!(s0_img_id, s1_img_id, "Cloned image must have distinct ID");
+    assert_eq!(doc.sheets[1].images[0].sheet, 1);
+
+    let s0_txt_id = &doc.sheets[0].text_objects[0].id;
+    let s1_txt_id = &doc.sheets[1].text_objects[0].id;
+    assert_ne!(s0_txt_id, s1_txt_id, "Cloned text must have distinct ID");
+    assert_eq!(doc.sheets[1].text_objects[0].sheet, 1);
+
+    // Ensure mutating/moving on sheet 1 does NOT delete from sheet 0
+    doc.push_image(1, inkwell_core::doc::ImageObject {
+        id: s1_img_id.clone(),
+        sheet: 1,
+        x: 100.0,
+        y: 100.0,
+        width: 60.0,
+        height: 60.0,
+        data_url: "data:image/png;base64,456".to_string(),
+    });
+    assert_eq!(doc.sheets[0].images.len(), 1, "Sheet 0 image must remain intact");
+    assert_eq!(doc.sheets[0].images[0].id, "orig_img_1");
+    assert_eq!(doc.sheets[1].images.len(), 1);
 }
 
 // ===========================================================================

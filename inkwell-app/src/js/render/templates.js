@@ -33,6 +33,27 @@ export function drawPageBackground(ctx, pl, viewport, pi, dpr, pane = 'left') {
   ctx.restore();
 }
 
+let _dotCellLight = null;
+let _dotCellDark = null;
+
+function getDotPattern(ctx, isDark) {
+  let cell = isDark ? _dotCellDark : _dotCellLight;
+  if (!cell) {
+    cell = document.createElement('canvas');
+    cell.width = 20;
+    cell.height = 20;
+    const cctx = cell.getContext('2d');
+    cctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(148, 163, 184, 0.8)';
+    cctx.beginPath();
+    cctx.arc(10, 10, 1.0, 0, Math.PI * 2);
+    cctx.fill();
+    if (isDark) _dotCellDark = cell;
+    else _dotCellLight = cell;
+  }
+  return ctx.createPattern(cell, 'repeat');
+}
+
+
 export function drawPageTemplateGuidelines(ctx, template, width, height) {
   if (!template || template === 'blank' || !ctx) return;
   const isDark = template === 'dark';
@@ -76,15 +97,13 @@ export function drawPageTemplateGuidelines(ctx, template, width, height) {
     }
     ctx.stroke();
   } else if (template === 'dot') {
-    const dotGap = 20;
-    const dotR = 1.0;
-    ctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(148, 163, 184, 0.8)';
-    for (let x = dotGap; x < width; x += dotGap) {
-      for (let y = dotGap; y < height; y += dotGap) {
-        ctx.beginPath();
-        ctx.arc(x, y, dotR, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    const pattern = getDotPattern(ctx, isDark);
+    if (pattern) {
+      ctx.save();
+      ctx.translate(10, 10);
+      ctx.fillStyle = pattern;
+      ctx.fillRect(8, 8, width - 16, height - 16);
+      ctx.restore();
     }
   } else if (template === 'cornell') {
     const headerH = 72;

@@ -13,6 +13,7 @@ class ViewportManager {
     this.rightPanY = 0;
     this.rightZoom = 1.0;
     this.splitMode = false;
+    this.splitRatio = 0.5;
     this.activePane = 'left';
     this.onChange = onChange;
     this.isPanning = false;
@@ -25,6 +26,10 @@ class ViewportManager {
     this.pinchStartDist = null;
     this.pinchStartZoom = null;
     this.pinchStartMid = null;
+    this.pinchStartPan = null;
+    this.pinchPane = null;
+    this.isTouchPanning = false;
+    this.touchPanLast = null;
 
     // Document multi-page continuous layout state
     this.pageLayouts = []; // array of { sheet, x, y, width, height }
@@ -36,6 +41,52 @@ class ViewportManager {
     if (this.element) {
       this.stageRect = this.element.getBoundingClientRect();
     }
+  }
+
+  /**
+   * Preserve the world point at the centre of each pane across a window or
+   * sidebar resize. Without this, shrinking the window leaves the current page
+   * far off-screen because pan was expressed in the old pixel geometry.
+   */
+  handleResize() {
+    const oldStage = this.stageRect;
+    if (!oldStage || !this.element) {
+      this.updateStageRect();
+      return;
+    }
+    const panes = this.splitMode ? ['left', 'right'] : ['left'];
+    const worlds = [];
+    for (const pane of panes) {
+      const b = this.getPaneBounds(pane);
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height / 2;
+      worlds.push(this.screenToWorld(cx, cy, pane));
+    }
+    this.updateStageRect();
+    panes.forEach((pane, i) => {
+      const b = this.getPaneBounds(pane);
+      const z = pane === 'right' && this.splitMode ? this.rightZoom : this.zoom;
+      const targetX = b.x + b.width / 2 - worlds[i][0] * z;
+      const targetY = b.y + b.height / 2 - worlds[i][1] * z;
+      this.setPan(targetX, targetY, pane);
+    });
+  }
+
+  getPaneBounds(pane = 'left') {
+    if (!this.stageRect) this.updateStageRect();
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    const totalH = this.stageRect ? this.stageRect.height : 600;
+    if (!this.splitMode) return { x: 0, y: 0, width: totalW, height: totalH };
+    const splitX = Math.round(totalW * this.splitRatio);
+    return pane === 'right'
+      ? { x: splitX, y: 0, width: Math.max(100, totalW - splitX), height: totalH }
+      : { x: 0, y: 0, width: Math.max(100, splitX), height: totalH };
+  }
+
+  paneAtScreenX(relX) {
+    if (!this.splitMode) return 'left';
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    return relX > totalW * this.splitRatio ? 'right' : 'left';
   }
 
   updateDocumentLayout(pageInfos) {
@@ -66,6 +117,8 @@ class ViewportManager {
         y: curY,
         width: w,
         height: h,
+        w,
+        h,
       });
       curY += h + PAGE_GAP;
     }
@@ -113,12 +166,10 @@ class ViewportManager {
   getVisiblePages(pane = 'left', margin = 300) {
     if (!this.pageLayouts || !this.pageLayouts.length) return [];
     if (!this.stageRect) this.updateStageRect();
-    const stageH = this.stageRect ? this.stageRect.height : 600;
-    const stageW = this.stageRect ? this.stageRect.width : 800;
-    const w = this.splitMode ? stageW / 2 : stageW;
+    const bounds = this.getPaneBounds(pane);
 
-    const [, topWy] = this.screenToWorld(0, -margin, pane);
-    const [, bottomWy] = this.screenToWorld(0, stageH + margin, pane);
+    const [, topWy] = this.screenToWorld(bounds.x, bounds.y - margin, pane);
+    const [, bottomWy] = this.screenToWorld(bounds.x, bounds.y + bounds.height + margin, pane);
     const minWy = Math.min(topWy, bottomWy);
     const maxWy = Math.max(topWy, bottomWy);
 
@@ -132,9 +183,9 @@ class ViewportManager {
   getActivePageInView(pane = 'left') {
     if (!this.pageLayouts || !this.pageLayouts.length) return 0;
     if (!this.stageRect) this.updateStageRect();
-    const stageH = this.stageRect ? this.stageRect.height : 600;
-    const centerY = stageH * 0.35; // upper third center of viewport
-    const [, centerWy] = this.screenToWorld(0, centerY, pane);
+    const bounds = this.getPaneBounds(pane);
+    const centerY = bounds.y + bounds.height * 0.35; // upper third center of pane
+    const [, centerWy] = this.screenToWorld(bounds.x + bounds.width / 2, centerY, pane);
 
     for (let i = 0; i < this.pageLayouts.length; i++) {
       const pl = this.pageLayouts[i];
@@ -150,10 +201,9 @@ class ViewportManager {
     this.splitMode = !this.splitMode;
     if (this.splitMode) {
       if (!this.stageRect) this.updateStageRect();
-      const totalW = this.stageRect ? this.stageRect.width : 800;
-      const halfW = totalW / 2;
+      const bounds = this.getPaneBounds('right');
       this.rightZoom = this.zoom;
-      this.rightPanX = this.panX + halfW;
+      this.rightPanX = this.panX + bounds.x;
       this.rightPanY = this.panY;
     }
     // toggleSplitMode is a discrete UI action — fire onChange immediately (not RAF-coalesced)
@@ -164,7 +214,8 @@ class ViewportManager {
   clampPanY(y, pane = 'left') {
     if (!this.totalDocHeight || !this.pageLayouts || !this.pageLayouts.length) return y;
     if (!this.stageRect) this.updateStageRect();
-    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const bounds = this.getPaneBounds(pane);
+    const stageH = bounds.height;
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
     const totalH = this.totalDocHeight * z;
@@ -181,10 +232,10 @@ class ViewportManager {
     if (!this.maxDocWidth || !this.stageRect) return x;
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
-    const totalW = this.stageRect ? this.stageRect.width : 800;
-    const stageW = this.splitMode ? totalW / 2 : totalW;
+    const bounds = this.getPaneBounds(pane);
+    const stageW = bounds.width;
     const docW = this.maxDocWidth * z;
-    const offsetLeft = isRight ? stageW : 0;
+    const offsetLeft = bounds.x;
     const minMargin = Math.min(60, stageW * 0.1);
 
     // Keep at least minMargin of the document visible on stage,
@@ -258,18 +309,23 @@ class ViewportManager {
   get stageW() { return this.stageRect ? this.stageRect.width : 800; }
   get stageH() { return this.stageRect ? this.stageRect.height : 600; }
 
-  centerDocument(pageWidthPt, pageHeightPt, pane = 'left') {
+  centerDocument(pageWidthPt, pageHeightPt, pane = 'left', preserveY = false) {
     const docW = this.maxDocWidth || pageWidthPt || 595.0;
     if (!this.stageRect) this.updateStageRect();
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
-    const totalW = this.stageRect ? this.stageRect.width : 800;
-    const stageW = this.splitMode ? totalW / 2 : totalW;
+    const bounds = this.getPaneBounds(pane);
+    const stageW = bounds.width;
 
-    const offsetLeft = isRight ? stageW : 0;
+    const offsetLeft = bounds.x;
     const targetPanX = Math.round(offsetLeft + (stageW - docW * z) / 2);
+    if (preserveY) {
+      const curPanY = isRight ? this.rightPanY : this.panY;
+      this.setPan(targetPanX, curPanY, pane);
+      return;
+    }
     const docH = (pageHeightPt || (this.pageLayouts && this.pageLayouts[0] ? this.pageLayouts[0].height : 842.0)) * z;
-    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const stageH = bounds.height;
     const targetPanY = docH < stageH ? Math.max(30, Math.round((stageH - docH) / 2)) : 30;
     this.setPan(targetPanX, targetPanY, pane);
   }
@@ -278,9 +334,9 @@ class ViewportManager {
     const docW = this.maxDocWidth || pageWidthPt || 595.0;
     const firstH = (this.pageLayouts && this.pageLayouts[0]) ? this.pageLayouts[0].height : (pageHeightPt || 842.0);
     if (!this.stageRect) this.updateStageRect();
-    const totalW = this.stageRect ? this.stageRect.width : 800;
-    const stageW = this.splitMode ? totalW / 2 : totalW;
-    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const bounds = this.getPaneBounds(pane);
+    const stageW = bounds.width;
+    const stageH = bounds.height;
 
     const margin = 48;
     const availW = Math.max(100, stageW - margin);
@@ -288,18 +344,19 @@ class ViewportManager {
 
     const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / docW, availH / firstH)));
     this.setZoom(fitZoom, null, pane);
-    this.centerDocument(docW, firstH, pane);
+    this.centerDocument(docW, firstH, pane, false);
   }
+
   fitWidth(pageWidthPt, pane = 'left') {
     const docW = this.maxDocWidth || pageWidthPt || 595.0;
     if (!this.stageRect) this.updateStageRect();
-    const totalW = this.stageRect ? this.stageRect.width : 800;
-    const stageW = this.splitMode ? totalW / 2 : totalW;
+    const bounds = this.getPaneBounds(pane);
+    const stageW = bounds.width;
     const margin = 48;
     const availW = Math.max(100, stageW - margin);
     const fitZoom = Math.max(0.2, Math.min(6.0, availW / docW));
     this.setZoom(fitZoom, null, pane);
-    this.centerDocument(docW, null, pane);
+    this.centerDocument(docW, null, pane, true);
   }
 
   scrollToPage(sheetIndex, pane = 'left') {
@@ -339,10 +396,15 @@ class ViewportManager {
     this.element = element;
     this.stageElement = element;
     this.updateStageRect();
-    window.addEventListener('resize', () => this.updateStageRect());
+    window.addEventListener('resize', () => this.handleResize());
     window.addEventListener('scroll', () => this.updateStageRect(), { passive: true });
     if (typeof ResizeObserver !== 'undefined' && element) {
-      new ResizeObserver(() => this.updateStageRect()).observe(element);
+      new ResizeObserver(() => {
+        if (this.stageRect && (Math.abs(element.getBoundingClientRect().width - this.stageRect.width) > 0.5 ||
+            Math.abs(element.getBoundingClientRect().height - this.stageRect.height) > 0.5)) {
+          this.handleResize();
+        }
+      }).observe(element);
     }
 
     const onWheel = e => {
@@ -355,7 +417,7 @@ class ViewportManager {
       const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
       const relX = e.clientX - stageRect.left;
       const relY = e.clientY - stageRect.top;
-      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+      const pane = this.paneAtScreenX(relX);
       this.activePane = pane;
       if (typeof window !== 'undefined' && window.state) {
         window.state.activePane = pane;
@@ -366,7 +428,7 @@ class ViewportManager {
       // dispatch WheelEvent(ctrlKey) to the DOM. Kept here as fallback when delivered.
       // Chromium reports a precision-touchpad pinch as a Ctrl+wheel event;
       // Command covers the equivalent gesture on macOS.
-      if (e.ctrlKey || e.metaKey) {
+      if (e.ctrlKey || e.metaKey || (Math.abs(e.deltaY) < 50 && e.deltaMode === 0 && e.ctrlKey)) {
         e.preventDefault();
         // Continuous smooth exponential zoom for touchpad pinch & Ctrl+wheel.
         // e.deltaMode: 0 = pixel (precision touchpad pinch), 1 = line (mouse wheel), 2 = page
@@ -399,66 +461,59 @@ class ViewportManager {
 
     window.addEventListener('wheel', onWheel, { passive: false });
 
-
-
     // Safari / WebKit native trackpad pinch-to-zoom support
-
     let gestureStartZoom = 1.0;
-
     const onGestureStart = e => {
-
       e.preventDefault();
-
       if (!this.stageRect) this.updateStageRect();
-
       const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-
       const relX = e.clientX - stageRect.left;
-
-      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
-
+      const pane = this.paneAtScreenX(relX);
       gestureStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
-
     };
-
     const onGestureChange = e => {
-
       e.preventDefault();
-
       if (!this.stageRect) this.updateStageRect();
-
       const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-
       const relX = e.clientX - stageRect.left;
-
-      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
-
+      const relY = e.clientY - stageRect.top;
+      const pane = this.paneAtScreenX(relX);
       const newZoom = Math.max(0.15, Math.min(10.0, gestureStartZoom * (e.scale || 1.0)));
-
       this.setZoom(newZoom, [relX, relY], pane);
-
     };
-
     const onGestureEnd = e => {
-
       e.preventDefault();
-
     };
-
-
 
     window.addEventListener('gesturestart', onGestureStart, { passive: false });
-
     window.addEventListener('gesturechange', onGestureChange, { passive: false });
-
     window.addEventListener('gestureend', onGestureEnd, { passive: false });
+
+    // VisualViewport precision pinch-to-zoom bridge
+    if (typeof window !== 'undefined' && window.visualViewport) {
+      let lastVvScale = window.visualViewport.scale || 1.0;
+      window.visualViewport.addEventListener('resize', () => {
+        const curScale = window.visualViewport.scale || 1.0;
+        if (Math.abs(curScale - lastVvScale) > 0.01) {
+          const factor = curScale / lastVvScale;
+          lastVvScale = curScale;
+          const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+          const relX = (window.visualViewport.offsetLeft || 0) + (window.visualViewport.width || stageRect.width) / 2;
+          const relY = (window.visualViewport.offsetTop || 0) + (window.visualViewport.height || stageRect.height) / 2;
+          const pane = this.paneAtScreenX(relX);
+          const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
+          const newZoom = Math.max(0.15, Math.min(10.0, curZoom * factor));
+          this.setZoom(newZoom, [relX, relY], pane);
+        }
+      });
+    }
 
     // ---- Multi-touch gesture handling via Pointer Events ----
     const onPointerDownGlobal = e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
       const relX = e.clientX - stageRect.left;
-      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+      const pane = this.paneAtScreenX(relX);
       this.activePane = pane;
       if (typeof window !== 'undefined' && window.state) {
         window.state.activePane = pane;
@@ -472,6 +527,8 @@ class ViewportManager {
         if (this.activeTouches.size >= 2) {
           this.isPinching = true;
           this.gestureOccurred = true;
+          e.preventDefault();
+          e.stopImmediatePropagation();
           if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
             window.cancelPendingTouchStroke();
           }
@@ -480,8 +537,14 @@ class ViewportManager {
           const dy = pts[1].y - pts[0].y;
           this.pinchStartDist = Math.hypot(dx, dy) || 1;
           this.pinchStartMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
-          this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
-          this.pinchStartPan = pane === 'right' ? [this.rightPanX, this.rightPanY] : [this.panX, this.panY];
+          const startRelX = this.pinchStartMid[0] - stageRect.left;
+          this.pinchPane = this.paneAtScreenX(startRelX);
+          const p = this.pinchPane;
+          this.pinchStartZoom = p === 'right' ? this.rightZoom : this.zoom;
+          this.pinchStartPan = p === 'right' ? [this.rightPanX, this.rightPanY] : [this.panX, this.panY];
+        } else if (typeof window !== 'undefined' && window.state && (window.state.touchDrawing === false || window.state.activeTool === 'pan')) {
+          this.isTouchPanning = true;
+          this.touchPanLast = [e.clientX, e.clientY];
         }
       }
       if (e.button === 1) { // middle button only
@@ -499,6 +562,7 @@ class ViewportManager {
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.activeTouches.size >= 2 && this.pinchStartDist && this.pinchStartMid && this.pinchStartPan) {
           e.preventDefault();
+          e.stopImmediatePropagation();
           this.isPinching = true;
           this.gestureOccurred = true;
           const pts = Array.from(this.activeTouches.values());
@@ -508,7 +572,7 @@ class ViewportManager {
           const newZoom = Math.max(0.15, Math.min(10.0, this.pinchStartZoom * scale));
           const stageRect = this.stageRect || { left: 0, top: 0 };
 
-          const pane = this.activePane;
+          const pane = this.pinchPane || this.activePane || 'left';
           const startMidX = this.pinchStartMid[0] - stageRect.left;
           const startMidY = this.pinchStartMid[1] - stageRect.top;
           const curMidX = curMid[0] - stageRect.left;
@@ -536,6 +600,15 @@ class ViewportManager {
             window.emitZoomChanged(this);
           }
           return;
+        } else if (this.isTouchPanning && this.touchPanLast && this.activeTouches.size === 1) {
+          const dx = e.clientX - this.touchPanLast[0];
+          const dy = e.clientY - this.touchPanLast[1];
+          this.touchPanLast = [e.clientX, e.clientY];
+          const pane = this.activePane;
+          const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+          const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+          this.setPan(curPanX + dx, curPanY + dy, pane);
+          return;
         }
       }
 
@@ -562,9 +635,12 @@ class ViewportManager {
           this.pinchStartZoom = null;
           this.pinchStartMid = null;
           this.pinchStartPan = null;
+          this.pinchPane = null;
         }
         if (this.activeTouches.size === 0) {
           this.gestureOccurred = false;
+          this.isTouchPanning = false;
+          this.touchPanLast = null;
         }
       }
       if (e.button === 1) {

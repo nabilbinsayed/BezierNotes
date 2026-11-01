@@ -252,7 +252,40 @@ export function deleteTextObject(textId, { recordHistory = true } = {}) {
   return t;
 }
 
-// ---- Multi-Object Batch Deletion & Transformations ----
+// ---- Multi-Object Batch Insertion, Deletion & Transformations ----
+
+export function addObjectsBatch({ strokes = [], images = [], textObjects = [] }, { recordHistory = true } = {}) {
+  if (!state.strokes) state.strokes = [];
+  if (!state.images) state.images = [];
+  if (!state.textObjects) state.textObjects = [];
+
+  for (const s of strokes) {
+    s.deleted = false;
+    state.strokes.push(s);
+  }
+  for (const img of images) {
+    img.deleted = false;
+    state.images.push(img);
+  }
+  for (const t of textObjects) {
+    t.deleted = false;
+    state.textObjects.push(t);
+  }
+
+  if (strokes.length) rebuildStrokesBySheet();
+
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'add_objects',
+      strokes: [...strokes],
+      images: [...images],
+      textObjects: [...textObjects],
+    });
+  }
+
+  notifyMutation('add_objects', { strokes, images, textObjects });
+  return { strokes, images, textObjects };
+}
 
 export function deleteObjectsBatch({ strokes = [], images = [], textObjects = [] }, { recordHistory = true } = {}) {
   const deletedStrokes = [];
@@ -377,7 +410,7 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
   emit('documentLoaded', { pageInfos, strokesCount: strokes.length });
 }
 
-export function insertPageAtIndex(targetIndex, pageInfo) {
+export function insertPageAtIndex(targetIndex, pageInfo, { recordHistory = true } = {}) {
   if (!state.pageInfos) state.pageInfos = [];
   const insertIdx = Math.max(0, Math.min(state.pageInfos.length, targetIndex));
   state.pageInfos.splice(insertIdx, 0, pageInfo);
@@ -388,7 +421,7 @@ export function insertPageAtIndex(targetIndex, pageInfo) {
     }
   });
 
-  // Shift sheet index of any existing strokes, images, text on or after insertIdx
+  // Shift sheet index of any existing strokes, images, text, bookmarks on or after insertIdx
   for (const s of state.strokes || []) {
     if (s.sheet >= insertIdx) s.sheet += 1;
   }
@@ -397,6 +430,9 @@ export function insertPageAtIndex(targetIndex, pageInfo) {
   }
   for (const t of state.textObjects || []) {
     if (t.sheet >= insertIdx) t.sheet += 1;
+  }
+  for (const bm of state.bookmarks || []) {
+    if (bm.page >= insertIdx) bm.page += 1;
   }
 
   // Shift cached page text data for indices >= insertIdx
@@ -421,6 +457,13 @@ export function insertPageAtIndex(targetIndex, pageInfo) {
   }
 
   rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'insert_page',
+      pageIndex: insertIdx,
+      pageInfo: { ...pageInfo },
+    });
+  }
   notifyMutation('insert_page', { pageIndex: insertIdx, pageInfo });
   return insertIdx;
 }
@@ -429,7 +472,7 @@ export function insertPage(afterIndex, pageInfo) {
   return insertPageAtIndex(afterIndex + 1, pageInfo);
 }
 
-export function duplicatePageAtIndex(sourceIndex, newPageInfo) {
+export function duplicatePageAtIndex(sourceIndex, newPageInfo, { recordHistory = true } = {}) {
   if (!state.pageInfos || sourceIndex < 0 || sourceIndex >= state.pageInfos.length) return -1;
   const targetIndex = sourceIndex + 1;
   const srcPi = state.pageInfos[sourceIndex] || {};
@@ -515,13 +558,30 @@ export function duplicatePageAtIndex(sourceIndex, newPageInfo) {
   state.textObjects.push(...clonedTexts);
 
   rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'duplicate_page',
+      sourceIndex,
+      targetIndex,
+      pageInfo: { ...pageInfo },
+      clonedStrokes,
+      clonedImages,
+      clonedTexts,
+    });
+  }
   notifyMutation('duplicate_page', { sourceIndex, targetIndex, pageInfo });
   return targetIndex;
 }
 
-export function deletePageAtIndex(pageIndex) {
+export function deletePageAtIndex(pageIndex, { recordHistory = true } = {}) {
   if (!state.pageInfos || state.pageInfos.length <= 1) return false;
   if (pageIndex < 0 || pageIndex >= state.pageInfos.length) return false;
+
+  const deletedPageInfo = state.pageInfos[pageIndex] ? { ...state.pageInfos[pageIndex] } : null;
+  const deletedStrokes = (state.strokes || []).filter(s => s.sheet === pageIndex && !s.deleted).map(s => ({ ...s }));
+  const deletedImages = (state.images || []).filter(img => img.sheet === pageIndex && !img.deleted).map(img => ({ ...img }));
+  const deletedTexts = (state.textObjects || []).filter(t => t.sheet === pageIndex && !t.deleted).map(t => ({ ...t }));
+  const deletedBookmarks = (state.bookmarks || []).filter(bm => bm.page === pageIndex).map(bm => ({ ...bm }));
 
   state.pageInfos.splice(pageIndex, 1);
   state.pageInfos.forEach((pi, idx) => {
@@ -560,11 +620,22 @@ export function deletePageAtIndex(pageIndex) {
   state.pageTextSpans = {};
 
   rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'delete_page',
+      pageIndex,
+      pageInfo: deletedPageInfo,
+      strokes: deletedStrokes,
+      images: deletedImages,
+      textObjects: deletedTexts,
+      bookmarks: deletedBookmarks,
+    });
+  }
   notifyMutation('delete_page', { pageIndex });
   return true;
 }
 
-export function reorderPageAtIndex(fromIndex, toIndex) {
+export function reorderPageAtIndex(fromIndex, toIndex, { recordHistory = true } = {}) {
   if (!state.pageInfos || fromIndex < 0 || fromIndex >= state.pageInfos.length ||
       toIndex < 0 || toIndex >= state.pageInfos.length || fromIndex === toIndex) {
     return false;
@@ -606,7 +677,106 @@ export function reorderPageAtIndex(fromIndex, toIndex) {
   state.pageTextSpans = {};
 
   rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'reorder_page',
+      fromIndex,
+      toIndex,
+    });
+  }
   notifyMutation('reorder_page', { fromIndex, toIndex });
+  return true;
+}
+
+export function rotatePageAtIndex(pageIndex, clockwise = true, { recordHistory = true } = {}) {
+  if (!state.pageInfos || pageIndex < 0 || pageIndex >= state.pageInfos.length) {
+    return false;
+  }
+
+  const pi = state.pageInfos[pageIndex];
+  const origW = pi.width_pt || 595.0;
+  const origH = pi.height_pt || 842.0;
+
+  pi.width_pt = origH;
+  pi.height_pt = origW;
+  if (pi.width) pi.width = origH;
+  if (pi.height) pi.height = origW;
+
+  // Rotate strokes on this sheet
+  for (const s of state.strokes || []) {
+    if (s.sheet === pageIndex && !s.deleted) {
+      for (const p of s.points || []) {
+        const ox = p.x !== undefined ? p.x : p[0];
+        const oy = p.y !== undefined ? p.y : p[1];
+        if (clockwise) {
+          p.x = origH - oy;
+          p.y = ox;
+        } else {
+          p.x = oy;
+          p.y = origW - ox;
+        }
+      }
+      if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+        s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width || 1.6);
+      }
+      s._cachedPath2D = null;
+    }
+  }
+
+  // Rotate images on this sheet
+  for (const img of state.images || []) {
+    if (img.sheet === pageIndex && !img.deleted) {
+      const ox = img.x;
+      const oy = img.y;
+      const ow = img.width;
+      const oh = img.height;
+      if (clockwise) {
+        img.x = origH - oy - oh;
+        img.y = ox;
+        img.width = oh;
+        img.height = ow;
+      } else {
+        img.x = oy;
+        img.y = origW - ox - ow;
+        img.width = oh;
+        img.height = ow;
+      }
+    }
+  }
+
+  // Rotate textObjects on this sheet
+  for (const t of state.textObjects || []) {
+    if (t.sheet === pageIndex && !t.deleted) {
+      const ox = t.x;
+      const oy = t.y;
+      const ow = t.width || 120;
+      const oh = t.height || 30;
+      if (clockwise) {
+        t.x = origH - oy - oh;
+        t.y = ox;
+        t.width = oh;
+        t.height = ow;
+      } else {
+        t.x = oy;
+        t.y = origW - ox - ow;
+        t.width = oh;
+        t.height = ow;
+      }
+    }
+  }
+
+  if (state.pageTextData) delete state.pageTextData[pageIndex];
+  if (state.pageTextSpans) delete state.pageTextSpans[pageIndex];
+
+  rebuildStrokesBySheet();
+  if (recordHistory) {
+    history.pushTransaction({
+      type: 'rotate_page',
+      pageIndex,
+      clockwise,
+    });
+  }
+  notifyMutation('rotate_page', { pageIndex, clockwise });
   return true;
 }
 
@@ -686,10 +856,60 @@ export function performUndo() {
         if (init.sheet !== undefined) t.sheet = init.sheet;
         t.x = init.x; t.y = init.y;
         if (init.fontSize) t.fontSize = init.fontSize;
+        if (init.width) t.width = init.width;
+        if (init.height) t.height = init.height;
       }
     }
     history.pushRedo(tx);
     notifyMutation('undo_transform_objects', tx);
+  } else if (tx.type === 'insert_page') {
+    deletePageAtIndex(tx.pageIndex, { recordHistory: false });
+    history.pushRedo(tx);
+    notifyMutation('undo_insert_page', { pageIndex: tx.pageIndex, pageInfo: tx.pageInfo });
+  } else if (tx.type === 'duplicate_page') {
+    deletePageAtIndex(tx.targetIndex, { recordHistory: false });
+    history.pushRedo(tx);
+    notifyMutation('undo_duplicate_page', tx);
+  } else if (tx.type === 'delete_page') {
+    insertPageAtIndex(tx.pageIndex, tx.pageInfo || { width_pt: 595.0, height_pt: 842.0 }, { recordHistory: false });
+    if (tx.strokes) {
+      for (const s of tx.strokes) {
+        s.sheet = tx.pageIndex;
+        s.deleted = false;
+        state.strokes.push(s);
+      }
+    }
+    if (tx.images) {
+      for (const img of tx.images) {
+        img.sheet = tx.pageIndex;
+        img.deleted = false;
+        state.images.push(img);
+      }
+    }
+    if (tx.textObjects) {
+      for (const t of tx.textObjects) {
+        t.sheet = tx.pageIndex;
+        t.deleted = false;
+        state.textObjects.push(t);
+      }
+    }
+    if (tx.bookmarks) {
+      for (const bm of tx.bookmarks) {
+        bm.page = tx.pageIndex;
+        state.bookmarks.push(bm);
+      }
+    }
+    rebuildStrokesBySheet();
+    history.pushRedo(tx);
+    notifyMutation('undo_delete_page', tx);
+  } else if (tx.type === 'reorder_page') {
+    reorderPageAtIndex(tx.toIndex, tx.fromIndex, { recordHistory: false });
+    history.pushRedo(tx);
+    notifyMutation('undo_reorder_page', { fromIndex: tx.toIndex, toIndex: tx.fromIndex });
+  } else if (tx.type === 'rotate_page') {
+    rotatePageAtIndex(tx.pageIndex, !tx.clockwise, { recordHistory: false });
+    history.pushRedo(tx);
+    notifyMutation('undo_rotate_page', { pageIndex: tx.pageIndex, clockwise: !tx.clockwise });
   }
 
   return true;
@@ -753,6 +973,8 @@ export function performRedo() {
         if (final.sheet !== undefined) t.sheet = final.sheet;
         t.x = final.x; t.y = final.y;
         if (final.fontSize) t.fontSize = final.fontSize;
+        if (final.width) t.width = final.width;
+        if (final.height) t.height = final.height;
       }
     }
     history.pushUndoRaw(tx);
@@ -773,6 +995,48 @@ export function performRedo() {
     tx.textObj.deleted = true;
     history.pushUndoRaw(tx);
     notifyMutation('redo_delete_text_object', { textObj: tx.textObj });
+  } else if (tx.type === 'insert_page') {
+    insertPageAtIndex(tx.pageIndex, tx.pageInfo, { recordHistory: false });
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_insert_page', { pageIndex: tx.pageIndex, pageInfo: tx.pageInfo });
+  } else if (tx.type === 'duplicate_page') {
+    insertPageAtIndex(tx.targetIndex, tx.pageInfo, { recordHistory: false });
+    if (tx.clonedStrokes) {
+      for (const s of tx.clonedStrokes) {
+        s.sheet = tx.targetIndex;
+        s.deleted = false;
+        state.strokes.push(s);
+      }
+    }
+    if (tx.clonedImages) {
+      for (const img of tx.clonedImages) {
+        img.sheet = tx.targetIndex;
+        img.deleted = false;
+        state.images.push(img);
+      }
+    }
+    if (tx.clonedTexts) {
+      for (const t of tx.clonedTexts) {
+        t.sheet = tx.targetIndex;
+        t.deleted = false;
+        state.textObjects.push(t);
+      }
+    }
+    rebuildStrokesBySheet();
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_duplicate_page', tx);
+  } else if (tx.type === 'delete_page') {
+    deletePageAtIndex(tx.pageIndex, { recordHistory: false });
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_delete_page', tx);
+  } else if (tx.type === 'reorder_page') {
+    reorderPageAtIndex(tx.fromIndex, tx.toIndex, { recordHistory: false });
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_reorder_page', { fromIndex: tx.fromIndex, toIndex: tx.toIndex });
+  } else if (tx.type === 'rotate_page') {
+    rotatePageAtIndex(tx.pageIndex, tx.clockwise, { recordHistory: false });
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_rotate_page', { pageIndex: tx.pageIndex, clockwise: tx.clockwise });
   }
 
   return true;

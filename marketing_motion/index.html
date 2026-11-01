@@ -1,0 +1,1308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inkwell — Motion Design Marketing Showcase</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background-color: #050608;
+    color: #f3f4f6;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  #stage-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at center, #0e121b 0%, #050608 100%);
+  }
+  canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: 16 / 9;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 1px 1px rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: #08090d;
+  }
+  /* Interactive Transport Bar */
+  #transport-bar {
+    position: fixed;
+    bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(18, 21, 29, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    padding: 8px 18px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    z-index: 100;
+    transition: opacity 0.3s ease;
+  }
+  #transport-bar:hover {
+    border-color: rgba(36, 200, 216, 0.4);
+  }
+  .btn {
+    background: transparent;
+    border: none;
+    color: #e5e7eb;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+  .btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #24c8d8;
+  }
+  .btn.active {
+    background: #24c8d8;
+    color: #050608;
+  }
+  #scrubber {
+    width: 260px;
+    accent-color: #24c8d8;
+    cursor: pointer;
+  }
+  .time-badge {
+    font-family: monospace;
+    font-size: 13px;
+    color: #9ca3af;
+    min-width: 90px;
+  }
+  .scene-pill {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #9ca3af;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+  }
+  .scene-pill:hover, .scene-pill.active {
+    background: rgba(36, 200, 216, 0.15);
+    color: #24c8d8;
+    border-color: rgba(36, 200, 216, 0.3);
+  }
+  /* Hide controls in render mode */
+  body.render-mode #transport-bar {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage-container">
+  <canvas id="motionCanvas" width="1920" height="1080"></canvas>
+</div>
+
+<div id="transport-bar">
+  <button id="btnPlayPause" class="btn">▶ Play</button>
+  <input type="range" id="scrubber" min="0" max="1020" value="0">
+  <span id="timeReadout" class="time-badge">00.0s / 34.0s</span>
+  
+  <div style="display: flex; gap: 6px; margin-left: 8px;">
+    <button class="scene-pill" data-time="0">1. Silos</button>
+    <button class="scene-pill" data-time="4.5">2. Philosophy</button>
+    <button class="scene-pill" data-time="9.0">3. 3-Layer PDF</button>
+    <button class="scene-pill" data-time="14.5">4. Inking</button>
+    <button class="scene-pill" data-time="20.5">5. 6400% Zoom</button>
+    <button class="scene-pill" data-time="25.5">6. Ergonomics</button>
+    <button class="scene-pill" data-time="29.5">7. Outro</button>
+  </div>
+</div>
+
+<script>
+(async function() {
+  const canvas = document.getElementById('motionCanvas');
+  const ctx = canvas.getContext('2d');
+  const scrubber = document.getElementById('scrubber');
+  const timeReadout = document.getElementById('timeReadout');
+  const btnPlayPause = document.getElementById('btnPlayPause');
+  const scenePills = document.querySelectorAll('.scene-pill');
+
+  const DURATION = 34.0;
+  const FPS = 30;
+  const TOTAL_FRAMES = Math.round(DURATION * FPS);
+  scrubber.max = TOTAL_FRAMES;
+
+  let currentFrame = 0;
+  let isPlaying = false;
+  let animId = null;
+  let lastTime = 0;
+
+  // Load stroke data for handwriting demo
+  let strokeData = [];
+  try {
+    const res = await fetch('strokes.json');
+    if (res.ok) {
+      strokeData = await res.json();
+    }
+  } catch (e) {
+    console.warn("Could not load strokes.json, using procedural strokes", e);
+  }
+
+  // Load app screenshot if available
+  let appImg = new Image();
+  let appImgLoaded = false;
+  appImg.onload = () => { appImgLoaded = true; };
+  appImg.src = 'app_screenshot.png';
+
+  // Check if URL has ?render=1
+  const isRenderMode = new URLSearchParams(window.location.search).get('render') === '1';
+  if (isRenderMode) {
+    document.body.classList.add('render-mode');
+  }
+
+  // Easing helpers
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeInOutCubic(x) { return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; }
+  function easeOutExpo(x) { return x === 1 ? 1 : 1 - Math.pow(2, -10 * x); }
+  function easeOutBack(x) {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+  function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+  // Draw cyber background with animated grid and particles
+  function drawBackground(t) {
+    ctx.fillStyle = '#07090e';
+    ctx.fillRect(0, 0, 1920, 1080);
+
+    // Glowing cyan / violet ambient radial gradients
+    const grad1 = ctx.createRadialGradient(
+      960 + Math.sin(t * 0.4) * 300, 
+      400 + Math.cos(t * 0.3) * 150, 
+      50, 
+      960, 540, 900
+    );
+    grad1.addColorStop(0, 'rgba(36, 200, 216, 0.08)');
+    grad1.addColorStop(0.5, 'rgba(99, 102, 241, 0.04)');
+    grad1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = grad1;
+    ctx.fillRect(0, 0, 1920, 1080);
+
+    // Perspective dot grid
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+    const gridSpacing = 60;
+    const gridOffset = (t * 20) % gridSpacing;
+    for (let x = 0; x <= 1920; x += gridSpacing) {
+      for (let y = gridOffset; y <= 1080; y += gridSpacing) {
+        ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
+    }
+    ctx.restore();
+
+    // Floating particles
+    ctx.save();
+    for (let i = 0; i < 40; i++) {
+      const px = ((i * 137.5 + t * (15 + (i % 10))) % 1920);
+      const py = ((i * 93.3 + Math.sin(t * 0.5 + i) * 60) % 1080);
+      const alpha = 0.15 + 0.15 * Math.sin(t * 2 + i);
+      const size = (i % 3 === 0) ? 2.5 : 1.5;
+      ctx.fillStyle = (i % 2 === 0) ? `rgba(36, 200, 216, ${alpha})` : `rgba(129, 140, 248, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(px, py, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Draw sleek glassmorphic pill badge
+  function drawBadge(text, x, y, options = {}) {
+    ctx.save();
+    const paddingX = options.paddingX || 20;
+    const height = options.height || 38;
+    const color = options.color || '#24c8d8';
+    const bg = options.bg || 'rgba(20, 24, 35, 0.75)';
+    const border = options.border || 'rgba(36, 200, 216, 0.3)';
+    const fontSize = options.fontSize || 16;
+
+    ctx.font = `600 ${fontSize}px sans-serif`;
+    const textWidth = ctx.measureText(text).width;
+    const width = textWidth + paddingX * 2;
+    const bx = x - width / 2;
+    const by = y - height / 2;
+
+    // Outer glow
+    if (options.glow) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 16;
+    }
+
+    // Background
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, width, height, height / 2);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Text
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y);
+
+    ctx.restore();
+    return width;
+  }
+
+  // =========================================================================
+  // SCENE 1: THE DILEMMA (0.0s - 4.5s)
+  // =========================================================================
+  function renderScene1(t) {
+    const p = t / 4.5;
+    drawBackground(t);
+
+    ctx.save();
+    // Warning header
+    const headAlpha = clamp(easeOutCubic(p * 2), 0, 1);
+    ctx.fillStyle = `rgba(244, 63, 94, ${headAlpha * 0.9})`;
+    ctx.font = '700 22px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('THE DIGITAL NOTE-TAKING PARADOX', 960, 230);
+
+    // Main Punchline Title
+    const titleAlpha = clamp(easeOutCubic((p - 0.15) * 2.5), 0, 1);
+    const titleY = 320 - (1 - titleAlpha) * 30;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 68px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Tired of Note-Taking Silos?', 960, titleY);
+
+    // 3 Cards representing current broken paradigms
+    const cards = [
+      {
+        title: 'Proprietary Databases',
+        sub: 'Notes locked in closed vendor formats (.xopp, .rnote, .one)',
+        icon: '🔒',
+        color: '#f43f5e',
+        delay: 0.3
+      },
+      {
+        title: 'Rasterized Bitmaps',
+        sub: 'PDFs degraded into blurry low-res pixels on import',
+        icon: '📉',
+        color: '#f59e0b',
+        delay: 0.5
+      },
+      {
+        title: 'Cloud Lock-in & Paywalls',
+        sub: 'Basic pressure and sync trapped behind subscriptions',
+        icon: '☁️',
+        color: '#ef4444',
+        delay: 0.7
+      }
+    ];
+
+    cards.forEach((card, idx) => {
+      const cardP = clamp((p - card.delay) * 3, 0, 1);
+      if (cardP <= 0) return;
+      const alpha = easeOutCubic(cardP);
+      const cx = 440 + idx * 520;
+      const cy = 560 + (1 - alpha) * 40;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Card plate
+      ctx.fillStyle = 'rgba(18, 22, 32, 0.85)';
+      ctx.strokeStyle = `rgba(244, 63, 94, ${alpha * 0.4})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(-230, -110, 460, 220, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      // Icon & crossout strike
+      ctx.font = '48px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(card.icon, 0, -35);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 24px sans-serif';
+      ctx.fillText(card.title, 0, 20);
+
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '400 16px sans-serif';
+      ctx.fillText(card.sub, 0, 55);
+
+      // Red strike through at p > 0.8
+      if (p > 0.78) {
+        const strikeP = clamp((p - 0.78) * 4, 0, 1);
+        ctx.strokeStyle = 'rgba(244, 63, 94, 0.9)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(-210, -90);
+        ctx.lineTo(-210 + strikeP * 420, -90 + strikeP * 180);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    });
+
+    // Subtitle punch
+    if (p > 0.7) {
+      const subAlpha = clamp((p - 0.7) * 4, 0, 1);
+      ctx.fillStyle = `rgba(229, 231, 235, ${subAlpha})`;
+      ctx.font = '500 26px sans-serif';
+      ctx.fillText('There has to be a better way.', 960, 830);
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 2: THE PHILOSOPHY — "FILE OVER APP" (4.5s - 9.0s)
+  // =========================================================================
+  function renderScene2(t) {
+    const p = (t - 4.5) / 4.5;
+    drawBackground(t);
+
+    ctx.save();
+    // Radiant explosion flash on entry
+    if (p < 0.2) {
+      const flash = (1 - p / 0.2);
+      ctx.fillStyle = `rgba(36, 200, 216, ${flash * 0.3})`;
+      ctx.fillRect(0, 0, 1920, 1080);
+    }
+
+    // Giant central philosophy title
+    const titleP = clamp(p * 2, 0, 1);
+    const titleScale = 1.3 - 0.3 * easeOutBack(titleP);
+    const titleAlpha = clamp(titleP * 1.5, 0, 1);
+
+    ctx.save();
+    ctx.translate(960, 310);
+    ctx.scale(titleScale, titleScale);
+
+    // Glowing title backplate
+    ctx.shadowColor = 'rgba(36, 200, 216, 0.7)';
+    ctx.shadowBlur = 35;
+    ctx.fillStyle = '#24c8d8';
+    ctx.font = '900 86px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('FILE OVER APP', 0, 0);
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('FILE OVER APP', 0, 0);
+    ctx.restore();
+
+    // Manifesto quotation card
+    const quoteP = clamp((p - 0.25) * 2, 0, 1);
+    if (quoteP > 0) {
+      const qAlpha = easeOutCubic(quoteP);
+      ctx.save();
+      ctx.translate(960, 480 + (1 - qAlpha) * 30);
+
+      ctx.fillStyle = `rgba(18, 22, 32, ${qAlpha * 0.9})`;
+      ctx.strokeStyle = `rgba(36, 200, 216, ${qAlpha * 0.4})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(-460, -60, 920, 120, 20);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#f3f4f6';
+      ctx.font = 'italic 500 28px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('“Your files belong to you, and the format must outlive the software.”', 0, -8);
+
+      ctx.fillStyle = '#24c8d8';
+      ctx.font = '600 18px monospace';
+      ctx.fillText('— STEPH ANGO (KEPANO, CEO OF OBSIDIAN)', 0, 32);
+
+      ctx.restore();
+    }
+
+    // 4 Contract Pillars that slide in
+    const pillars = [
+      { text: 'Standard ISO 32000 PDF', sub: 'Zero proprietary containers' },
+      { text: 'Never Rasterize at Import', sub: '100% Vector resolution' },
+      { text: 'Universal Interoperability', sub: 'Opens in Acrobat, Chrome, Preview' },
+      { text: 'Local-First Cloud Freedom', sub: 'Sync via Drive, Nextcloud, Syncthing' }
+    ];
+
+    pillars.forEach((pil, idx) => {
+      const pilP = clamp((p - 0.45 - idx * 0.1) * 3, 0, 1);
+      if (pilP <= 0) return;
+      const alpha = easeOutBack(pilP);
+      const px = 300 + idx * 440;
+      const py = 730 + (1 - alpha) * 40;
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.fillStyle = 'rgba(14, 18, 28, 0.85)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.roundRect(-200, -50, 400, 100, 14);
+      ctx.fill();
+      ctx.stroke();
+
+      // Checkmark icon
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(-160, 0, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✓', -160, 0);
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 18px sans-serif';
+      ctx.fillText(pil.text, -130, -10);
+
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '400 14px sans-serif';
+      ctx.fillText(pil.sub, -130, 16);
+
+      ctx.restore();
+    });
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 3: THREE-LAYER PDF ARCHITECTURE (9.0s - 14.5s)
+  // =========================================================================
+  function renderScene3(t) {
+    const p = (t - 9.0) / 5.5;
+    drawBackground(t);
+
+    ctx.save();
+    // Scene header
+    const headAlpha = clamp(p * 2, 0, 1);
+    ctx.fillStyle = `rgba(36, 200, 216, ${headAlpha})`;
+    ctx.font = '700 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('ENGINEERED ARCHITECTURE', 960, 120);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 52px sans-serif';
+    ctx.fillText('The Three-Layer PDF Engine', 960, 180);
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '400 20px sans-serif';
+    ctx.fillText('Written simultaneously into every saved PDF for universal fidelity & lossless re-editing', 960, 220);
+
+    // 3 Exploded Isometric Glass Layers
+    const layers = [
+      {
+        num: 'LAYER 1',
+        name: 'Visual Layer (Universal)',
+        desc: 'Variable-width pressure strokes saved as filled vector ribbon outlines (Bézier curves + non-zero winding). Crisp at 6400% zoom.',
+        badge: 'Opens in Acrobat, Chrome, Apple Books',
+        color: '#24c8d8',
+        yOffset: -120
+      },
+      {
+        num: 'LAYER 2',
+        name: 'Semantic Layer (Interoperable)',
+        desc: 'Registered as standard ISO 32000 /Annot objects (/Subtype /Ink) with /AP appearance streams and centreline coordinates.',
+        badge: 'Deletable & recognised in Adobe Acrobat & Okular',
+        color: '#818cf8',
+        yOffset: 0
+      },
+      {
+        num: 'LAYER 3',
+        name: 'Private Sidecar (Lossless Re-editing)',
+        desc: 'Raw high-frequency sample stream (x, y, pressure, timestamps) varint-delta compressed inside an /EmbeddedFiles stream.',
+        badge: 'Infinite edit history · Stays inside the PDF',
+        color: '#10b981',
+        yOffset: 120
+      }
+    ];
+
+    // Animation progress for layer explosion
+    const explodeP = clamp(easeOutBack(clamp(p * 1.8, 0, 1)), 0, 1.2);
+
+    layers.forEach((layer, idx) => {
+      const lp = clamp((p - 0.15 - idx * 0.15) * 2.5, 0, 1);
+      if (lp <= 0) return;
+      const alpha = easeOutCubic(lp);
+      const targetY = 530 + layer.yOffset * explodeP;
+
+      ctx.save();
+      ctx.translate(960, targetY);
+
+      // Glass plate
+      ctx.fillStyle = 'rgba(15, 19, 29, 0.9)';
+      ctx.strokeStyle = layer.color;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = layer.color;
+      ctx.shadowBlur = 18;
+
+      ctx.beginPath();
+      ctx.roundRect(-520, -50, 1040, 100, 16);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Layer number badge
+      ctx.fillStyle = layer.color;
+      ctx.font = '800 16px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(layer.num, -480, -18);
+
+      // Layer Title
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 24px sans-serif';
+      ctx.fillText(layer.name, -390, -18);
+
+      // Description
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '400 15px sans-serif';
+      ctx.fillText(layer.desc, -480, 12);
+
+      // Feature pill on the right
+      drawBadge(layer.badge, 330, 0, {
+        color: layer.color,
+        border: layer.color,
+        fontSize: 13,
+        height: 32,
+        paddingX: 14
+      });
+
+      ctx.restore();
+    });
+
+    // Convergence punch at end of scene
+    if (p > 0.8) {
+      const fuseAlpha = clamp((p - 0.8) * 5, 0, 1);
+      ctx.fillStyle = `rgba(36, 200, 216, ${fuseAlpha * 0.15})`;
+      ctx.fillRect(0, 0, 1920, 1080);
+      drawBadge('⚡ ONE SINGLE PDF · ZERO SILOS · ZERO SIDECARS', 960, 920, {
+        color: '#24c8d8',
+        fontSize: 18,
+        height: 48,
+        paddingX: 30,
+        glow: true
+      });
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 4: ULTRA-LOW LATENCY INKING ENGINE (14.5s - 20.5s)
+  // =========================================================================
+  function renderScene4(t) {
+    const p = (t - 14.5) / 6.0;
+    drawBackground(t);
+
+    ctx.save();
+    // Scene header
+    ctx.fillStyle = '#24c8d8';
+    ctx.font = '700 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('SUB-PIXEL ANALOGUE ACCURACY', 960, 110);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 48px sans-serif';
+    ctx.fillText('Ultra-Low Latency Inking Engine', 960, 165);
+
+    // Mock Notebook Sheet Surface (Crisp Vector Canvas)
+    const sheetW = 1000;
+    const sheetH = 600;
+    const sx = 960 - sheetW / 2;
+    const sy = 220;
+
+    // Drop shadow & White paper
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+    ctx.shadowBlur = 30;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.roundRect(sx, sy, sheetW, sheetH, 12);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Faint notebook grid on paper
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(sx, sy, sheetW, sheetH, 12);
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+    ctx.lineWidth = 1;
+    for (let gy = sy; gy <= sy + sheetH; gy += 30) {
+      ctx.beginPath();
+      ctx.moveTo(sx, gy);
+      ctx.lineTo(sx + sheetW, gy);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Replay handwritten strokes from captured data
+    if (strokeData.length > 0) {
+      ctx.save();
+      // Clip to paper
+      ctx.beginPath();
+      ctx.roundRect(sx, sy, sheetW, sheetH, 12);
+      ctx.clip();
+
+      const totalStrokes = strokeData.length;
+      strokeData.forEach((stroke, sIdx) => {
+        const points = stroke.points;
+        if (!points || points.length === 0) return;
+
+        // Progress for this stroke
+        const sStart = sIdx * 0.45;
+        const sDur = 0.5;
+        const strokeP = clamp((p - sStart) / sDur, 0, 1);
+        if (strokeP <= 0) return;
+
+        const maxIdx = Math.floor(strokeP * (points.length - 1));
+
+        // Draw variable-width stroke segments
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = stroke.color === '#24c8d8' ? '#0f172a' : '#1e293b';
+
+        for (let i = 1; i <= maxIdx; i++) {
+          const pt0 = points[i - 1];
+          const pt1 = points[i];
+          const width = 2.5 + pt1.p * 7.0;
+
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          // Transform stroke coordinate to sheet bounds
+          const x0 = sx + 60 + (pt0.x * 0.95);
+          const y0 = sy + 40 + (pt0.y * 0.95);
+          const x1 = sx + 60 + (pt1.x * 0.95);
+          const y1 = sy + 40 + (pt1.y * 0.95);
+
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+
+          // Live stylus cursor glow at current point
+          if (i === maxIdx && strokeP < 1) {
+            ctx.save();
+            ctx.shadowColor = '#24c8d8';
+            ctx.shadowBlur = 18;
+            ctx.fillStyle = '#24c8d8';
+            ctx.beginPath();
+            ctx.arc(x1, y1, width * 1.2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Stylus pointer ring
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x1, y1, 14, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      });
+      ctx.restore();
+    }
+
+    // Chisel-Tip Highlighter Demo sweeping across text at p > 0.5
+    if (p > 0.5) {
+      const hlP = clamp((p - 0.5) * 2.5, 0, 1);
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(sx, sy, sheetW, sheetH, 12);
+      ctx.clip();
+
+      const hlWidth = hlP * 500;
+      ctx.fillStyle = 'rgba(250, 204, 21, 0.42)'; // Yellow highlighter
+      ctx.beginPath();
+      ctx.roundRect(sx + 100, sy + 380, hlWidth, 38, 4);
+      ctx.fill();
+
+      // Flat chisel cursor at head
+      if (hlP < 1) {
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(sx + 100 + hlWidth - 6, sy + 376, 8, 46);
+      }
+      ctx.restore();
+    }
+
+    // Floating Metric HUD cards around the sheet
+    const hudMetrics = [
+      { label: 'Pen-to-Photon', val: '≤ 25 ms', color: '#10b981', x: 260, y: 350 },
+      { label: 'Sampling Rate', val: '233 Hz', color: '#24c8d8', x: 260, y: 480 },
+      { label: 'Pressure Resolution', val: '8,192 Levels', color: '#818cf8', x: 1660, y: 350 },
+      { label: 'Filter Algorithm', val: 'One-Euro (Casiez)', color: '#f59e0b', x: 1660, y: 480 }
+    ];
+
+    hudMetrics.forEach((m, idx) => {
+      const mp = clamp((p - 0.2 - idx * 0.1) * 3, 0, 1);
+      if (mp <= 0) return;
+      const alpha = easeOutBack(mp);
+
+      ctx.save();
+      ctx.translate(m.x, m.y + (1 - alpha) * 20);
+
+      ctx.fillStyle = 'rgba(18, 22, 32, 0.9)';
+      ctx.strokeStyle = m.color;
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = m.color;
+      ctx.shadowBlur = 12;
+
+      ctx.beginPath();
+      ctx.roundRect(-120, -45, 240, 90, 14);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '600 13px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(m.label.toUpperCase(), 0, -14);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '800 24px sans-serif';
+      ctx.fillText(m.val, 0, 20);
+
+      ctx.restore();
+    });
+
+    // Dual-canvas pipeline callout at bottom
+    if (p > 0.6) {
+      const dAlpha = clamp((p - 0.6) * 3, 0, 1);
+      drawBadge('⚡ Dual-Canvas Wet/Dry Pipeline: Instant Stylus Feedback with Zero Full-Scene Redraws', 960, 870, {
+        color: '#24c8d8',
+        fontSize: 16,
+        height: 44,
+        paddingX: 24
+      });
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 5: THE VECTOR ADVANTAGE — 6400% INFINITE ZOOM (20.5s - 25.5s)
+  // =========================================================================
+  function renderScene5(t) {
+    const p = (t - 20.5) / 5.0;
+    drawBackground(t);
+
+    ctx.save();
+    // Scene header
+    ctx.fillStyle = '#24c8d8';
+    ctx.font = '700 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('RESOLUTION INDEPENDENCE', 960, 110);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 52px sans-serif';
+    ctx.fillText('The Vector Advantage: 6,400% Zoom', 960, 170);
+
+    // Dynamic Zoom Level readout
+    const zoomLevel = Math.round(100 + easeInOutCubic(p) * 6300);
+    drawBadge(`CURRENT MAGNIFICATION: ${zoomLevel}%`, 960, 230, {
+      color: '#f59e0b',
+      border: '#f59e0b',
+      fontSize: 16,
+      height: 38,
+      glow: true
+    });
+
+    // Split Screen Comparison: Left = Traditional Raster, Right = Inkwell Vector
+    const panelW = 680;
+    const panelH = 500;
+    const py = 300;
+
+    // LEFT: Traditional Annotator (Raster Bitmap)
+    ctx.save();
+    ctx.translate(580, py + panelH / 2);
+    ctx.fillStyle = '#0f131d';
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(-panelW / 2, -panelH / 2, panelW, panelH, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    // Clip panel
+    ctx.beginPath();
+    ctx.roundRect(-panelW / 2, -panelH / 2, panelW, panelH, 16);
+    ctx.clip();
+
+    // Draw pixelated curve blocks simulating raster zoom
+    const pixelBlockSize = Math.max(2, Math.floor(easeOutCubic(p) * 36));
+    ctx.fillStyle = '#334155';
+    for (let bx = -280; bx <= 280; bx += pixelBlockSize) {
+      for (let by = -180; by <= 180; by += pixelBlockSize) {
+        // Curve formula
+        const dist = Math.abs(by - Math.sin(bx * 0.02) * 120);
+        if (dist < 40) {
+          const alpha = clamp(1 - dist / 40, 0.2, 1);
+          ctx.fillStyle = `rgba(226, 232, 240, ${alpha})`;
+          ctx.fillRect(bx, by, pixelBlockSize - 1, pixelBlockSize - 1);
+        }
+      }
+    }
+
+    // Badge
+    drawBadge('❌ TRADITIONAL ANNOTATORS (BLURRY RASTER)', 0, panelH / 2 - 45, {
+      color: '#f43f5e',
+      border: '#f43f5e',
+      bg: 'rgba(20, 10, 15, 0.9)',
+      fontSize: 14
+    });
+    ctx.restore();
+
+    // RIGHT: Inkwell (100% Vector Bézier)
+    ctx.save();
+    ctx.translate(1340, py + panelH / 2);
+    ctx.fillStyle = '#0f131d';
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(-panelW / 2, -panelH / 2, panelW, panelH, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    // Clip panel
+    ctx.beginPath();
+    ctx.roundRect(-panelW / 2, -panelH / 2, panelW, panelH, 16);
+    ctx.clip();
+
+    // Draw mathematically smooth vector ribbon outline
+    ctx.strokeStyle = '#24c8d8';
+    ctx.fillStyle = '#f8fafc';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#24c8d8';
+    ctx.shadowBlur = 16;
+
+    ctx.beginPath();
+    ctx.moveTo(-280, 0);
+    ctx.bezierCurveTo(-100, -180, 100, 180, 280, 0);
+    ctx.bezierCurveTo(100, 240, -100, -120, -280, 0);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Vector Bézier anchor control points
+    const anchors = [
+      { x: -280, y: 0 },
+      { x: -100, y: -180 },
+      { x: 100, y: 180 },
+      { x: 280, y: 0 }
+    ];
+    anchors.forEach(pt => {
+      ctx.fillStyle = '#10b981';
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+
+    // Badge
+    drawBadge('✓ INKWELL (100% LOSSLESS VECTOR RIBBON)', 0, panelH / 2 - 45, {
+      color: '#10b981',
+      border: '#10b981',
+      bg: 'rgba(10, 24, 18, 0.9)',
+      fontSize: 14
+    });
+    ctx.restore();
+
+    // Bottom banner
+    if (p > 0.6) {
+      drawBadge('⚡ Powered by Google PDFium: Vector Tiles Rendered On-Demand at Any Zoom Level', 960, 890, {
+        color: '#24c8d8',
+        fontSize: 16,
+        height: 44,
+        paddingX: 24
+      });
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 6: STUDIO ERGONOMICS & WORKSPACE (25.5s - 29.5s)
+  // =========================================================================
+  function renderScene6(t) {
+    const p = (t - 25.5) / 4.0;
+    drawBackground(t);
+
+    ctx.save();
+    // Scene header
+    ctx.fillStyle = '#24c8d8';
+    ctx.font = '700 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('TABLET & DESKTOP ERGONOMICS', 960, 100);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 48px sans-serif';
+    ctx.fillText('Engineered for Modern Note-Takers', 960, 155);
+
+    // 3D perspective tilted application mockup
+    const tiltP = clamp(p * 2, 0, 1);
+    ctx.save();
+    ctx.translate(960, 560);
+
+    const mockupW = 1200;
+    const mockupH = 680;
+
+    // Shadow & frame
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = '#0d0f14';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.roundRect(-mockupW / 2, -mockupH / 2, mockupW, mockupH, 18);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Draw real app screenshot if loaded
+    if (appImgLoaded) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(-mockupW / 2, -mockupH / 2, mockupW, mockupH, 18);
+      ctx.clip();
+      ctx.drawImage(appImg, -mockupW / 2, -mockupH / 2, mockupW, mockupH);
+      ctx.restore();
+    } else {
+      // Mock navigation rail & split view fallback
+      ctx.fillStyle = '#121417';
+      ctx.fillRect(-mockupW / 2, -mockupH / 2, 60, mockupH);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-mockupW / 2 + 100, -mockupH / 2 + 50, 480, mockupH - 100);
+      ctx.fillRect(-mockupW / 2 + 620, -mockupH / 2 + 50, 480, mockupH - 100);
+    }
+
+    // Radial Quick Menu Blooming at p > 0.3
+    if (p > 0.3) {
+      const radP = clamp((p - 0.3) * 3, 0, 1);
+      const radScale = easeOutBack(radP);
+      const rx = 100;
+      const ry = 0;
+
+      ctx.save();
+      ctx.translate(rx, ry);
+      ctx.scale(radScale, radScale);
+
+      // Central core
+      ctx.fillStyle = 'rgba(18, 24, 38, 0.95)';
+      ctx.strokeStyle = '#24c8d8';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#24c8d8';
+      ctx.shadowBlur = 24;
+
+      ctx.beginPath();
+      ctx.arc(0, 0, 36, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#24c8d8';
+      ctx.font = '700 24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✦', 0, 0);
+
+      // 6 Radial action slots
+      const radialSlots = [
+        { label: 'Pen', icon: '🖋️', angle: 0 },
+        { label: 'Marker', icon: '🖍️', angle: Math.PI / 3 },
+        { label: 'Eraser', icon: '🧹', angle: 2 * Math.PI / 3 },
+        { label: 'Lasso', icon: '⬚', angle: Math.PI },
+        { label: 'Shapes', icon: '▭', angle: 4 * Math.PI / 3 },
+        { label: 'Split', icon: '◫', angle: 5 * Math.PI / 3 }
+      ];
+
+      radialSlots.forEach((slot, sIdx) => {
+        const slotDist = 110;
+        const sx = Math.cos(slot.angle) * slotDist;
+        const sy = Math.sin(slot.angle) * slotDist;
+
+        // Connector line
+        ctx.strokeStyle = 'rgba(36, 200, 216, 0.4)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(sx, sy);
+        ctx.stroke();
+
+        // Slot bubble
+        ctx.fillStyle = sIdx === 1 ? '#6366f1' : 'rgba(20, 26, 40, 0.92)';
+        ctx.strokeStyle = sIdx === 1 ? '#a5b4fc' : 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, 30, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.font = '22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(slot.icon, sx, sy);
+      });
+
+      ctx.restore();
+    }
+
+    ctx.restore();
+
+    // 3 Floating Highlight Feature Badges
+    const features = [
+      { text: 'Radial Quick Menu (Right-Click / Stylus Barrel)', x: 420, y: 940 },
+      { text: 'Dual-Pane Split View (Ctrl+\\)', x: 960, y: 940 },
+      { text: 'Temp-Dir WAL Crash Durability (0 Data Loss)', x: 1500, y: 940 }
+    ];
+
+    features.forEach((feat, idx) => {
+      const fp = clamp((p - 0.4 - idx * 0.15) * 3, 0, 1);
+      if (fp <= 0) return;
+      drawBadge(feat.text, feat.x, feat.y, {
+        color: '#24c8d8',
+        fontSize: 14,
+        height: 40,
+        paddingX: 18
+      });
+    });
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // SCENE 7: HERO OUTRO & CALL TO ACTION (29.5s - 34.0s)
+  // =========================================================================
+  function renderScene7(t) {
+    const p = (t - 29.5) / 4.5;
+    drawBackground(t);
+
+    ctx.save();
+    // Radiant crescendo pulse
+    const pulseScale = 1.0 + 0.05 * Math.sin(t * 3);
+
+    // Glowing Inkwell Emblem / Logo
+    ctx.save();
+    ctx.translate(960, 260);
+    ctx.scale(pulseScale, pulseScale);
+
+    ctx.shadowColor = '#24c8d8';
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = 'rgba(18, 24, 38, 0.9)';
+    ctx.strokeStyle = '#24c8d8';
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    ctx.arc(0, 0, 60, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Stylized Quill / Nib Icon
+    ctx.fillStyle = '#24c8d8';
+    ctx.beginPath();
+    ctx.moveTo(0, -32);
+    ctx.lineTo(24, 14);
+    ctx.lineTo(8, 28);
+    ctx.lineTo(0, 18);
+    ctx.lineTo(-8, 28);
+    ctx.lineTo(-24, 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Grand Title
+    const titleP = clamp(p * 2, 0, 1);
+    const titleAlpha = easeOutCubic(titleP);
+    ctx.save();
+    ctx.translate(960, 420);
+    ctx.shadowColor = 'rgba(36, 200, 216, 0.8)';
+    ctx.shadowBlur = 28;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 88px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '6px';
+    ctx.fillText('INKWELL', 0, 0);
+    ctx.restore();
+
+    // Subtitle & Tagline
+    ctx.fillStyle = '#24c8d8';
+    ctx.font = '600 24px monospace';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '3px';
+    ctx.fillText('PDF-FIRST DIGITAL NOTEBOOK & VECTOR ANNOTATOR', 960, 490);
+
+    ctx.fillStyle = '#f3f4f6';
+    ctx.font = 'italic 500 32px sans-serif';
+    ctx.fillText('“Your Notes. Your Files. Forever.”', 960, 560);
+
+    // Badges Row
+    const badges = [
+      '⚡ Built with Rust & Tauri v2',
+      '📄 ISO 32000 PDF Standard',
+      '💻 Windows · Linux · macOS',
+      '🎁 100% Free & Open Source'
+    ];
+
+    badges.forEach((b, idx) => {
+      const bx = 330 + idx * 420;
+      drawBadge(b, bx, 650, {
+        color: '#e5e7eb',
+        border: 'rgba(255, 255, 255, 0.15)',
+        fontSize: 15,
+        height: 38,
+        paddingX: 18
+      });
+    });
+
+    // Primary Call to Action Button
+    const ctaP = clamp((p - 0.3) * 2.5, 0, 1);
+    if (ctaP > 0) {
+      const ctaScale = 1.0 + 0.03 * Math.sin(t * 4);
+      ctx.save();
+      ctx.translate(960, 770);
+      ctx.scale(ctaScale, ctaScale);
+
+      // Outer glow
+      ctx.shadowColor = '#24c8d8';
+      ctx.shadowBlur = 30;
+      ctx.fillStyle = '#24c8d8';
+      ctx.beginPath();
+      ctx.roundRect(-300, -36, 600, 72, 36);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#050608';
+      ctx.font = '800 24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('github.com/nabilbinsayed/InkrementalNotes', 0, 0);
+
+      ctx.restore();
+
+      // Secondary action
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '500 18px sans-serif';
+      ctx.fillText('⭐ Star on GitHub  ·  Download Standalone Binaries', 960, 850);
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================================
+  // MASTER TIMELINE DISPATCHER
+  // =========================================================================
+  window.renderFrame = function(t, frameIdx) {
+    currentFrame = frameIdx !== undefined ? frameIdx : Math.round(t * FPS);
+
+    if (t < 4.5) {
+      renderScene1(t);
+    } else if (t < 9.0) {
+      renderScene2(t);
+    } else if (t < 14.5) {
+      renderScene3(t);
+    } else if (t < 20.5) {
+      renderScene4(t);
+    } else if (t < 25.5) {
+      renderScene5(t);
+    } else if (t < 29.5) {
+      renderScene6(t);
+    } else {
+      renderScene7(t);
+    }
+
+    // Update transport bar if visible
+    if (!isRenderMode) {
+      scrubber.value = currentFrame;
+      const tSec = (currentFrame / FPS).toFixed(1);
+      timeReadout.innerText = `${tSec.padStart(4, '0')}s / ${DURATION.toFixed(1)}s`;
+
+      // Update active scene pill
+      scenePills.forEach(pill => {
+        const pTime = parseFloat(pill.dataset.time);
+        if (t >= pTime && t < pTime + 5.0) {
+          pill.classList.add('active');
+        } else {
+          pill.classList.remove('active');
+        }
+      });
+    }
+  };
+
+  // Playback loop for interactive mode
+  function loop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const delta = (timestamp - lastTime) / 1000;
+    lastTime = timestamp;
+
+    if (isPlaying) {
+      currentFrame++;
+      if (currentFrame > TOTAL_FRAMES) {
+        currentFrame = 0; // Loop
+      }
+      const t = currentFrame / FPS;
+      window.renderFrame(t, currentFrame);
+    }
+    animId = requestAnimationFrame(loop);
+  }
+
+  // Transport controls
+  btnPlayPause.addEventListener('click', () => {
+    isPlaying = !isPlaying;
+    btnPlayPause.innerText = isPlaying ? '❚❚ Pause' : '▶ Play';
+  });
+
+  scrubber.addEventListener('input', (e) => {
+    currentFrame = parseInt(e.target.value);
+    const t = currentFrame / FPS;
+    window.renderFrame(t, currentFrame);
+  });
+
+  scenePills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      const targetTime = parseFloat(pill.dataset.time);
+      currentFrame = Math.round(targetTime * FPS);
+      window.renderFrame(targetTime, currentFrame);
+    });
+  });
+
+  // Initial draw
+  window.renderFrame(0, 0);
+  animId = requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

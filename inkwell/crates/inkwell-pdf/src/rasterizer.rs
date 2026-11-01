@@ -29,7 +29,8 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let page_w = p.width().value as f64;
         let page_h = p.height().value as f64;
         
-        let scale = (px as f64) / rw.max(rh);
+        let base_span = if rw <= 512.0 && rh <= 512.0 { 512.0 } else { rw.max(rh) };
+        let scale = (px as f64) / base_span;
         let out_w = (rw * scale).round().max(1.0) as u32;
         let out_h = (rh * scale).round().max(1.0) as u32;
         

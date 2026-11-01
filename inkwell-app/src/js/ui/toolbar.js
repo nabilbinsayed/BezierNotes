@@ -23,6 +23,7 @@ export function initToolbar(viewport) {
   bindModals();
   updateToolbarUI();
   updateUndoRedoUI();
+  renderCustomColorSwatches();
   on('toolPropertyChanged', () => syncColorUI());
 }
 
@@ -84,12 +85,25 @@ export function updateToolbarUI() {
       if (iconSvg) iconSvg.innerHTML = '<line x1="4" y1="20" x2="20" y2="4"/><line x1="8" y1="14" x2="10" y2="16"/><line x1="11" y1="11" x2="13" y2="13"/><line x1="14" y1="8" x2="16" y2="10"/>';
       shapesBtn.title = 'Shape: Line (L)';
       if (shortcutSpan) shortcutSpan.textContent = 'L';
+    } else if (state.shapeKind === 'arrow') {
+      if (iconSvg) iconSvg.innerHTML = '<line x1="5" y1="19" x2="19" y2="5"/><polyline points="10 5 19 5 19 14"/>';
+      shapesBtn.title = 'Shape: Arrow';
+      if (shortcutSpan) shortcutSpan.textContent = 'A';
+    } else if (state.shapeKind === 'triangle') {
+      if (iconSvg) iconSvg.innerHTML = '<polygon points="12 3 22 21 2 21"/>';
+      shapesBtn.title = 'Shape: Triangle';
+      if (shortcutSpan) shortcutSpan.textContent = '▲';
     } else {
       if (iconSvg) iconSvg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
       shapesBtn.title = 'Shape: Rectangle (R)';
       if (shortcutSpan) shortcutSpan.textContent = 'R';
     }
   }
+
+  const curShape = state.shapeKind || 'rect';
+  document.querySelectorAll('.btn-shape-select').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-shape') === curShape);
+  });
 
   syncColorUI();
   updateSaveStatusUI(state.isSaving ? 'saving' : (state.isDirty ? 'dirty' : 'saved'));
@@ -265,6 +279,21 @@ function bindPropertyControls() {
     if (rgb) toolManager.setColor(rgb);
   });
 
+  // Persist a hand-picked colour into the first free custom slot once the user
+  // settles on a value (change fires on picker close, not on every drag frame).
+  $('popoverCustomColorPicker') && $('popoverCustomColorPicker').addEventListener('change', e => {
+    const hex = String(e.target.value || '').toLowerCase();
+    if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+    const slots = loadCustomColors();
+    if (slots.includes(hex)) return;
+    const free = slots.indexOf(null);
+    if (free >= 0) {
+      slots[free] = hex;
+      persistCustomColors(slots);
+      renderCustomColorSwatches();
+    }
+  });
+
   // Stroke width sliders
   const sliders = [$('propWidthSlider'), $('widthSlider'), $('popoverWidthSlider')];
   sliders.forEach(slider => {
@@ -291,6 +320,53 @@ function bindPropertyControls() {
         document.querySelectorAll('.btn-width-preset').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
       }
+    });
+  });
+
+  // Custom colour slots: empty = save current colour, filled = apply,
+  // right-click / Shift-click = free the slot.
+  document.querySelectorAll('.swatch-custom').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const slot = Number(btn.getAttribute('data-slot'));
+      if (Number.isNaN(slot)) return;
+      const slots = loadCustomColors();
+      if (btn.classList.contains('empty')) {
+        e.stopPropagation();
+        slots[slot] = rgbToHex(state.color || [0.08, 0.09, 0.14]);
+        persistCustomColors(slots);
+        renderCustomColorSwatches();
+        emit('toast', { message: 'Colour saved to custom slot', type: 'success' });
+      }
+    });
+    btn.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slot = Number(btn.getAttribute('data-slot'));
+      if (Number.isNaN(slot)) return;
+      const slots = loadCustomColors();
+      if (slots[slot]) {
+        slots[slot] = null;
+        persistCustomColors(slots);
+        renderCustomColorSwatches();
+        emit('toast', { message: 'Custom colour slot cleared', type: 'info' });
+      }
+    });
+  });
+
+  // Shape kind selector
+  document.querySelectorAll('.btn-shape-select').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const shape = btn.getAttribute('data-shape');
+      if (!shape) return;
+      // Route every shape kind through a canvas tool that the pointer pipeline
+      // understands, then set the exact geometry (setTool resets shapeKind for
+      // rect/ellipse, so the order here is deliberate).
+      const routedTool = shape === 'ellipse' ? 'ellipse'
+        : (shape === 'line' || shape === 'ruler') ? 'line'
+          : 'rect';
+      toolManager.setTool(routedTool);
+      toolManager.setShapeKind(shape);
+      updateToolbarUI();
     });
   });
 
@@ -334,11 +410,12 @@ function bindZoomControls() {
       const pageZoom = Math.min(availW / pageW, availH / pageH);
       const widthZoom = availW / pageW;
 
+      const pane = _viewport.activePane || 'left';
       // Toggle to fitWidth if already in fitPage, allowing widescreen displays to fill the page
       if (Math.abs(_viewport.zoom - pageZoom) < 0.05 && widthZoom > pageZoom * 1.1) {
-        _viewport.fitWidth(pageW, 'left');
+        _viewport.fitWidth(pageW, pane);
       } else {
-        _viewport.fitPage(pageW, pageH, 'left');
+        _viewport.fitPage(pageW, pageH, pane);
       }
       emit('zoomChanged', { zoom: _viewport.zoom });
     }
@@ -410,7 +487,6 @@ function bindModals() {
 
   // Go to Page modal
   $('btnPageDropdown') && $('btnPageDropdown').addEventListener('click', () => openGoToPageModal());
-  $('pageNumDisplay') && $('pageNumDisplay').addEventListener('click', () => openGoToPageModal());
   $('btnCloseGoToPageModal') && $('btnCloseGoToPageModal').addEventListener('click', () => closeGoToPageModal());
   $('btnCancelGoToPage') && $('btnCancelGoToPage').addEventListener('click', () => closeGoToPageModal());
 
@@ -460,6 +536,9 @@ function bindModals() {
 
 export function openSettingsModal() {
   $('settingsModal') && $('settingsModal').classList.remove('hidden');
+  if (typeof window.onSettingsModalOpened === 'function') {
+    window.onSettingsModalOpened();
+  }
 }
 
 export function closeSettingsModal() {
@@ -475,14 +554,24 @@ export function switchSettingsTab(tabName) {
     panel.classList.toggle('active', isMatch);
     panel.classList.toggle('hidden', !isMatch);
   });
+  if (tabName === 'tabShortcuts' && typeof window.onSettingsModalOpened === 'function') {
+    window.onSettingsModalOpened();
+  }
 }
 
 export function openGoToPageModal() {
   $('goToPageModal') && $('goToPageModal').classList.remove('hidden');
   const input = $('goToPageInput');
+  const total = (state.pageInfos && state.pageInfos.length) ? state.pageInfos.length : 1;
+  const totalEl = $('goToPageTotalDisplay');
+  if (totalEl) totalEl.textContent = String(total);
   if (input) {
+    input.max = String(total);
     input.value = String((state.leftSheet || 0) + 1);
-    input.focus();
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
   }
 }
 
@@ -519,6 +608,13 @@ export function drawStrokePreview() {
   const rgb = state.color || [0.08, 0.09, 0.14];
   const colorStr = `rgb(${rgb.map(v => Math.round(v * 255)).join(',')})`;
 
+  // Paper-coloured strip keeps black ink visible on the dark inspector.
+  ctx.fillStyle = '#f8fafc';
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(6, 3, w - 12, h - 6, 7);
+  else ctx.rect(6, 3, w - 12, h - 6);
+  ctx.fill();
+
   ctx.save();
   if (isHighlighter) {
     ctx.globalAlpha = 0.55;
@@ -539,6 +635,72 @@ export function drawStrokePreview() {
   ctx.restore();
 }
 
+const CUSTOM_COLORS_KEY = 'inkwell.customColors.v1';
+
+export function loadCustomColors() {
+  const fallback = [null, null, null, null];
+  try {
+    const raw = localStorage.getItem(CUSTOM_COLORS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return fallback;
+    for (let i = 0; i < 4; i++) {
+      fallback[i] = (typeof parsed[i] === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed[i])) ? parsed[i].toLowerCase() : null;
+    }
+    return fallback;
+  } catch (e) {
+    console.warn('[inkwell/toolbar] Could not load custom colours:', e);
+    return fallback;
+  }
+}
+
+export function persistCustomColors(slots) {
+  try {
+    localStorage.setItem(CUSTOM_COLORS_KEY, JSON.stringify(slots));
+  } catch (e) {
+    console.warn('[inkwell/toolbar] Could not save custom colours:', e);
+  }
+}
+
+export function renderCustomColorSwatches() {
+  const slots = loadCustomColors();
+  document.querySelectorAll('.swatch-custom').forEach(btn => {
+    const slot = Number(btn.getAttribute('data-slot'));
+    const color = slots[slot];
+    btn.classList.toggle('empty', !color);
+    btn.classList.toggle('filled', !!color);
+    if (color) {
+      btn.style.background = color;
+      btn.setAttribute('data-color', color);
+      btn.classList.toggle('active', color === rgbToHex(state.color || [0.08, 0.09, 0.14]));
+      btn.title = `Custom colour ${slot + 1} — right-click to remove`;
+      btn.innerHTML = '<span class="custom-slot-fill"></span>';
+    } else {
+      btn.style.background = '';
+      btn.removeAttribute('data-color');
+      btn.title = `Empty custom slot ${slot + 1} — click to save the current colour`;
+      btn.innerHTML = '<span class="custom-plus">+</span>';
+    }
+  });
+  // Re-apply the generic swatch click binding to freshly rendered contents by
+  // delegating from the grid instead of binding per element.
+  const grid = $('customSwatchesGrid');
+  if (grid && !grid._inkwellDelegated) {
+    grid._inkwellDelegated = true;
+    grid.addEventListener('click', e => {
+      const chip = e.target.closest('.swatch-custom.filled');
+      if (!chip) return;
+      const colorStr = chip.getAttribute('data-color');
+      if (!colorStr) return;
+      const rgb = hexToRgb(colorStr);
+      if (rgb) {
+        toolManager.setColor(rgb);
+        document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s === chip));
+      }
+    });
+  }
+}
+
 export function syncColorUI(rgb) {
   const color = rgb || state.color || [0.08, 0.09, 0.14];
   const hex = rgbToHex(color);
@@ -554,7 +716,7 @@ export function syncColorUI(rgb) {
   }
 
   // 2. Sync curated and custom color swatches
-  document.querySelectorAll('.color-swatches-grid .swatch, .dock-preset-chip, .settings-color-swatch').forEach(s => {
+  document.querySelectorAll('.color-swatches-grid .swatch, .swatch-custom[data-color], .dock-preset-chip, .settings-color-swatch').forEach(s => {
     const sColor = s.getAttribute('data-color');
     const isMatch = sColor && sColor.toLowerCase() === hex.toLowerCase();
     s.classList.toggle('active', !!isMatch);
@@ -580,6 +742,7 @@ export function syncColorUI(rgb) {
   });
 
   // 4. Update popover title according to active tool
+  const isShapeTool = ['rect', 'ellipse', 'line', 'ruler', 'shapes'].includes(state.activeTool);
   const toolTitle = $('popoverToolTitle');
   if (toolTitle) {
     const toolTitles = {
@@ -594,10 +757,19 @@ export function syncColorUI(rgb) {
       eraser: 'Eraser Properties',
       lasso: 'Lasso Properties',
     };
-    toolTitle.textContent = toolTitles[state.activeTool] || 'Tool Properties';
+    if (isShapeTool && state.shapeKind) {
+      const shapeNames = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', ruler: 'Ruler', triangle: 'Triangle', arrow: 'Arrow' };
+      toolTitle.textContent = `${shapeNames[state.shapeKind] || 'Shape'} Properties`;
+    } else {
+      toolTitle.textContent = toolTitles[state.activeTool] || 'Tool Properties';
+    }
   }
 
-  // 5. Draw live stroke preview
+  // 5. Show the shape-kind selector only for geometry tools.
+  const shapeSection = $('popoverShapeSection');
+  if (shapeSection) shapeSection.style.display = isShapeTool ? '' : 'none';
+
+  // 6. Draw live stroke preview on a paper-white strip so dark inks stay visible.
   drawStrokePreview();
 }
 

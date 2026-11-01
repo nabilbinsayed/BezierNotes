@@ -53,6 +53,15 @@ pub struct TextObject {
     pub height: f64,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: String,
+    pub page: usize,
+    pub label: String,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub kind: SheetKind,
@@ -158,6 +167,8 @@ pub struct Document {
     pub device: DeviceInfo,
     pub sheets: Vec<Sheet>,
     pub viewports: Vec<Viewport>,
+    #[serde(default)]
+    pub bookmarks: Vec<Bookmark>,
 }
 
 impl Default for Document {
@@ -167,6 +178,7 @@ impl Default for Document {
             device: DeviceInfo::default(),
             sheets: Vec::new(),
             viewports: vec![Viewport::default()],
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -187,8 +199,22 @@ impl Document {
         if index >= self.sheets.len() {
             return None;
         }
-        let cloned = self.sheets[index].clone();
+        let mut cloned = self.sheets[index].clone();
         let target_idx = index + 1;
+        let seed = ((index as u128) << 64) | (target_idx as u128);
+        for (i, layer) in cloned.layers.iter_mut().enumerate() {
+            for (j, stroke) in layer.strokes.iter_mut().enumerate() {
+                stroke.id = stroke.id.wrapping_add(seed).wrapping_add(((i * 1000 + j + 1) as u128).wrapping_mul(0x9e3779b97f4a7c15));
+            }
+        }
+        for (i, img) in cloned.images.iter_mut().enumerate() {
+            img.sheet = target_idx;
+            img.id = format!("{}_dup_{}_{}", img.id, target_idx, i);
+        }
+        for (i, txt) in cloned.text_objects.iter_mut().enumerate() {
+            txt.sheet = target_idx;
+            txt.id = format!("{}_dup_{}_{}", txt.id, target_idx, i);
+        }
         self.sheets.insert(target_idx, cloned);
         self.reindex_bounded_sheets();
         Some(target_idx)
@@ -259,6 +285,7 @@ impl Document {
     }
 
     pub fn push_image(&mut self, sheet: usize, image: ImageObject) {
+        self.remove_image(&image.id);
         while self.sheets.len() <= sheet {
             self.sheets.push(Sheet::bounded(self.sheets.len()));
         }
@@ -277,6 +304,7 @@ impl Document {
     }
 
     pub fn upsert_text(&mut self, sheet: usize, text_obj: TextObject) {
+        self.remove_text(&text_obj.id);
         while self.sheets.len() <= sheet {
             self.sheets.push(Sheet::bounded(self.sheets.len()));
         }
@@ -398,6 +426,7 @@ pub fn encode_sidecar(doc: &Document) -> Vec<u8> {
         "device": doc.device,
         "sheets": doc.sheets,
         "viewports": doc.viewports,
+        "bookmarks": doc.bookmarks,
         "layer_stroke_counts": counts,
     });
     let json = serde_json::to_vec(&skeleton).expect("skeleton is serialisable");
@@ -435,6 +464,7 @@ pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError>
             .map_err(|e| SidecarError::Json(e.to_string()))?,
         viewports: serde_json::from_value(sk["viewports"].clone())
             .unwrap_or_else(|_| vec![Viewport::default()]),
+        bookmarks: serde_json::from_value(sk["bookmarks"].clone()).unwrap_or_default(),
     };
 
     let counts: Vec<Vec<usize>> =

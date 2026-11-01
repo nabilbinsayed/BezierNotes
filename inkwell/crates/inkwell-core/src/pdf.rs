@@ -554,7 +554,7 @@ impl PdfFile {
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /Stamp /F 4 /Rect [{}] \
-                 /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
+                 /T (Inkwell) /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
                 fmt_rect(&annot_rect)
             )
             .into_bytes(),
@@ -640,7 +640,7 @@ impl PdfFile {
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /FreeText /F 4 /Rect [{}] \
-                 /Contents {escaped_contents} \
+                 /T (Inkwell) /Contents {escaped_contents} \
                  /DA ({font_tag} {:.2} Tf {:.3} {:.3} {:.3} rg) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
                 fmt_rect(&annot_rect),
@@ -689,7 +689,7 @@ impl PdfFile {
     fn rewrite_catalog(&mut self, ef: u32, fs: u32, hash: &[u8]) -> Result<()> {
         let dict = self.obj_dict(self.root_num)?;
 
-        // 1. Check if existing catalog has /Names and preserve other trees (e.g. /Dests, /JavaScript)
+        // 1. Check if existing catalog has /Names and preserve other trees (e.g. /Dests, /JavaScript) and existing EmbeddedFiles
         let names_section = if let Some(names_range) = po::dict_get(&self.base, dict, "/Names") {
             let names_inner = if let Some(ind) = po::as_ref_num(&self.base, names_range) {
                 self.obj_dict(ind).ok()
@@ -697,9 +697,14 @@ impl PdfFile {
                 po::dict_inner(&self.base, names_range.0).ok()
             };
             if let Some(inner) = names_inner {
+                let mut existing_pairs = Vec::new();
+                if let Some(ef_range) = po::dict_get(&self.base, inner, "/EmbeddedFiles") {
+                    existing_pairs = extract_embedded_files_names(&self.base, ef_range);
+                }
+                existing_pairs.push(format!("(inkwell.doc) {fs} 0 R"));
                 let mut nb = po::dict_without(&self.base, inner, &["/EmbeddedFiles"]);
                 nb.extend_from_slice(
-                    format!("/EmbeddedFiles << /Names [(inkwell.doc) {fs} 0 R] >>\n").as_bytes(),
+                    format!("/EmbeddedFiles << /Names [{}] >>\n", existing_pairs.join(" ")).as_bytes(),
                 );
                 format!("/Names <<\n{}>>\n", String::from_utf8_lossy(&nb))
             } else {
@@ -978,6 +983,73 @@ fn refs_in_array(d: &[u8], range: (usize, usize)) -> Vec<u32> {
         }
     }
     out
+}
+
+fn extract_embedded_files_names(d: &[u8], ef_range: (usize, usize)) -> Vec<String> {
+    let ef_inner = if let Some(ind) = po::as_ref_num(d, ef_range) {
+        if let Some(obj) = po::find_object(d, ind) {
+            po::dict_inner(d, obj.0).ok()
+        } else {
+            None
+        }
+    } else {
+        po::dict_inner(d, ef_range.0).ok()
+    };
+    let mut pairs = Vec::new();
+    if let Some(inner) = ef_inner {
+        if let Some(names_arr_range) = po::dict_get(d, inner, "/Names") {
+            let arr_range = if let Some(ind) = po::as_ref_num(d, names_arr_range) {
+                if let Some(obj) = po::find_object(d, ind) {
+                    obj
+                } else {
+                    names_arr_range
+                }
+            } else {
+                names_arr_range
+            };
+            let slice = &d[arr_range.0..arr_range.1];
+            let open_idx = slice.iter().position(|&b| b == b'[');
+            let close_idx = slice.iter().rposition(|&b| b == b']');
+            if let (Some(open), Some(close)) = (open_idx, close_idx) {
+                let start = arr_range.0 + open + 1;
+                let end = arr_range.0 + close;
+                let mut cur = start;
+                while cur < end {
+                    cur = po::skip_ws(d, cur);
+                    if cur >= end {
+                        break;
+                    }
+                    let key_start = cur;
+                    let key_end = po::skip_value(d, cur);
+                    if key_end <= key_start || key_end > end {
+                        break;
+                    }
+                    cur = po::skip_ws(d, key_end);
+                    if cur >= end {
+                        break;
+                    }
+                    let val_start = cur;
+                    let val_end = po::skip_value(d, cur);
+                    if val_end <= val_start || val_end > end {
+                        break;
+                    }
+                    let key_bytes = &d[key_start..key_end];
+                    let is_inkwell = key_bytes == b"(inkwell.doc)"
+                        || key_bytes.eq_ignore_ascii_case(b"<696e6b77656c6c2e646f63>");
+                    if !is_inkwell {
+                        let pair_str = format!(
+                            "{} {}",
+                            String::from_utf8_lossy(key_bytes),
+                            String::from_utf8_lossy(&d[val_start..val_end])
+                        );
+                        pairs.push(pair_str);
+                    }
+                    cur = val_end;
+                }
+            }
+        }
+    }
+    pairs
 }
 
 fn parse_hex_color_rgb(hex: &str) -> (f64, f64, f64) {

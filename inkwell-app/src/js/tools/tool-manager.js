@@ -248,7 +248,7 @@ export function setWidth(widthPt) {
 }
 
 export function setShapeKind(kind) {
-  if (['rect', 'ellipse', 'line'].includes(kind)) {
+  if (['rect', 'ellipse', 'line', 'ruler', 'arrow', 'triangle'].includes(kind)) {
     state.shapeKind = kind;
     emit('toolPropertyChanged', { property: 'shapeKind', value: kind });
   }
@@ -300,25 +300,37 @@ export function handleSpaceKeyUp(e) {
   state.spaceDidPan = false;
 }
 
-let eDownTime = 0;
+const SPRING_TOOL_MAP = {
+  'e': 'eraser',
+  'm': 'highlighter',
+  'v': 'lasso',
+  'h': 'pan',
+};
+
+let springKeyDownTime = 0;
+
 export function handleSpringKeyDown(key) {
   if (state.springKey) return;
-  if (key === 'e' || key === 'E') {
-    state.springKey = 'e';
-    eDownTime = performance.now();
-    state.prevTool = state.activeTool;
-    setTool('eraser', { isUserSwitch: true });
-  }
+  const lower = (key || '').toLowerCase();
+  const targetTool = SPRING_TOOL_MAP[lower];
+  if (!targetTool) return;
+
+  state.springKey = lower;
+  springKeyDownTime = performance.now();
+  state.springToolBefore = state.activeTool;
+  state.prevTool = state.activeTool;
+  setTool(targetTool, { isUserSwitch: true });
 }
 
 export function handleSpringKeyUp(key) {
   if (!state.springKey) return;
-  if ((key === 'e' || key === 'E') && state.springKey === 'e') {
+  const lower = (key || '').toLowerCase();
+  if (lower === state.springKey) {
     state.springKey = null;
-    const duration = performance.now() - eDownTime;
-    // Only revert if held for longer than 350ms (momentary hold)
-    if (duration > 350) {
-      setTool(state.prevTool || 'pen', { isUserSwitch: false });
+    const duration = performance.now() - springKeyDownTime;
+    // Only revert if held for >= 220ms (momentary hold)
+    if (duration >= 220) {
+      setTool(state.springToolBefore || state.prevTool || 'pen', { isUserSwitch: false });
     }
   }
 }
@@ -326,8 +338,8 @@ export function handleSpringKeyUp(key) {
 export function cancelSpringKeys() {
   if (state.springKey) {
     state.springKey = null;
-    eDownTime = 0;
-    setTool(state.prevTool || 'pen', { isUserSwitch: false });
+    springKeyDownTime = 0;
+    setTool(state.springToolBefore || state.prevTool || 'pen', { isUserSwitch: false });
   }
   if (state.isSpacePressed) {
     const toolBefore = state.spaceToolBefore || 'pen';

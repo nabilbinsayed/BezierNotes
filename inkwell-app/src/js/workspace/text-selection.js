@@ -146,7 +146,7 @@ export function mergeTextSpansIntoLines(spans) {
   return lines;
 }
 
-export function findCharAndOffsetAtPageCoord(sheet, px, py, { maxDist = Infinity } = {}) {
+export function findCharAndOffsetAtPageCoord(sheet, px, py, { maxDist = 28 } = {}) {
   const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
   if (!pageData || !pageData.lines || !pageData.lines.length || !pageData.chars || !pageData.chars.length) {
     return null;
@@ -167,14 +167,19 @@ export function findCharAndOffsetAtPageCoord(sheet, px, py, { maxDist = Infinity
     if (px < lx0) distX = lx0 - px;
     else if (px > lx1) distX = px - lx1;
 
-    const totalDist = distY * 8.0 + distX;
+    // Reject if too far in margin or vertically
+    if (Number.isFinite(maxDist)) {
+      if (distY > maxDist || distX > maxDist * 1.2) continue;
+    }
+
+    const totalDist = distY * 2.5 + distX * 0.5;
     if (totalDist < bestLineDist) {
       bestLineDist = totalDist;
       bestLine = line;
     }
   }
 
-  if (!bestLine || (Number.isFinite(maxDist) && bestLineDist > maxDist)) {
+  if (!bestLine) {
     return null;
   }
 
@@ -237,18 +242,13 @@ export function findCharAndOffsetAtPageCoord(sheet, px, py, { maxDist = Infinity
   };
 }
 
-export function computeTextSelectionRanges(sheet, startCharIdx, endCharIdx) {
+function extractSheetSelection(sheet, charFilter) {
   const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
-  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
-
-  const minIdx = Math.min(startCharIdx, endCharIdx);
-  const maxIdx = Math.max(startCharIdx, endCharIdx);
-
-  const selectedChars = pageData.chars.filter(c => c.char_index >= minIdx && c.char_index <= maxIdx);
-  if (!selectedChars.length) return null;
+  if (!pageData || !pageData.chars || !pageData.chars.length) return { text: '', rects: [], chars: [] };
+  const selectedChars = pageData.chars.filter(charFilter);
+  if (!selectedChars.length) return { text: '', rects: [], chars: [] };
 
   const selectedString = selectedChars.map(c => c.c).join('');
-
   const lineMap = new Map();
   for (const c of selectedChars) {
     if (!lineMap.has(c.line_index)) {
@@ -284,14 +284,66 @@ export function computeTextSelectionRanges(sheet, startCharIdx, endCharIdx) {
   }
 
   rects.sort((a, b) => a.rect[1] - b.rect[1]);
+  return { text: selectedString, rects, chars: selectedChars };
+}
+
+export function computeTextSelectionRanges(startSheet, startCharIdx, endCharIdx, endSheet = startSheet) {
+  if (startSheet === endSheet) {
+    const minIdx = Math.min(startCharIdx, endCharIdx);
+    const maxIdx = Math.max(startCharIdx, endCharIdx);
+    const res = extractSheetSelection(startSheet, c => c.char_index >= minIdx && c.char_index <= maxIdx);
+    if (!res.chars.length) return null;
+    return {
+      sheet: startSheet,
+      startSheet,
+      endSheet,
+      startCharIdx: minIdx,
+      endCharIdx: maxIdx,
+      text: res.text,
+      rects: res.rects,
+      chars: res.chars
+    };
+  }
+
+  let s0 = startSheet, c0 = startCharIdx;
+  let s1 = endSheet, c1 = endCharIdx;
+  if (s0 > s1) {
+    s0 = endSheet; c0 = endCharIdx;
+    s1 = startSheet; c1 = startCharIdx;
+  }
+
+  const allRects = [];
+  const textParts = [];
+  const allChars = [];
+
+  for (let s = s0; s <= s1; s++) {
+    let filter;
+    if (s === s0) {
+      filter = c => c.char_index >= c0;
+    } else if (s === s1) {
+      filter = c => c.char_index <= c1;
+    } else {
+      filter = () => true;
+    }
+    const res = extractSheetSelection(s, filter);
+    if (res.chars.length) {
+      allRects.push(...res.rects);
+      textParts.push(res.text);
+      allChars.push(...res.chars);
+    }
+  }
+
+  if (!allChars.length) return null;
 
   return {
-    sheet,
-    startCharIdx: minIdx,
-    endCharIdx: maxIdx,
-    text: selectedString,
-    rects,
-    chars: selectedChars
+    sheet: startSheet,
+    startSheet,
+    endSheet,
+    startCharIdx,
+    endCharIdx,
+    text: textParts.join('\n\n'),
+    rects: allRects,
+    chars: allChars
   };
 }
 
@@ -303,9 +355,34 @@ export function expandSelectionToWord(sheet, charIndex) {
   if (idx < 0) idx = Math.max(0, Math.min(pageData.chars.length - 1, charIndex));
 
   const initialLine = pageData.chars[idx].line_index;
+  const lineChars = pageData.chars.filter(c => c.line_index === initialLine);
+  if (!lineChars.length) return null;
+
+  // Use Intl.Segmenter when available for Unicode-aware word segmentation
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    const lineText = lineChars.map(c => c.c).join('');
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+    const segments = Array.from(segmenter.segment(lineText));
+    const targetCharIdxInLine = lineChars.findIndex(c => c.char_index === pageData.chars[idx].char_index);
+    let matchedSeg = null;
+    for (const seg of segments) {
+      if (seg.isWordLike && targetCharIdxInLine >= seg.index && targetCharIdxInLine < seg.index + seg.segment.length) {
+        matchedSeg = seg;
+        break;
+      }
+    }
+    if (matchedSeg) {
+      const startChar = lineChars[matchedSeg.index];
+      const endChar = lineChars[matchedSeg.index + matchedSeg.segment.length - 1];
+      if (startChar && endChar) {
+        return computeTextSelectionRanges(sheet, startChar.char_index, endChar.char_index);
+      }
+    }
+  }
+
+  // Fallback word boundary search
   let start = idx;
   let end = idx;
-
   const isWordChar = c => !/[\s\r\n\t.,!?;:()\[\]{}"'—–/\\]/.test(c);
 
   while (start > 0 && pageData.chars[start - 1].line_index === initialLine && isWordChar(pageData.chars[start - 1].c)) {
@@ -359,31 +436,4 @@ export function clearTextSelection() {
   }
   emit('textSelectionCleared', {});
   compositor.redrawAll();
-}
-
-export function drawSearchHighlights(ctx, viewport, dpr, pane = 'left') {
-  if (!ctx || !state.searchQuery || !state.searchResults || !state.searchResults.length || !viewport) return;
-
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.scale(dpr, dpr);
-
-  const activeMatch = state.searchResults[state.activeSearchMatch];
-
-  for (let i = 0; i < state.searchResults.length; i++) {
-    const res = state.searchResults[i];
-    const pl = viewport.getPageLayout(res.pageIndex || 0);
-    const [sx0, sy0] = viewport.worldToScreen(pl.x + res.rect[0], pl.y + res.rect[1], pane);
-    const [sx1, sy1] = viewport.worldToScreen(pl.x + res.rect[2], pl.y + res.rect[3], pane);
-
-    const isCurrent = (res === activeMatch);
-    ctx.fillStyle = isCurrent ? 'rgba(234, 179, 8, 0.65)' : 'rgba(250, 204, 21, 0.35)';
-    ctx.strokeStyle = isCurrent ? '#ca8a04' : 'rgba(202, 138, 4, 0.5)';
-    ctx.lineWidth = 1;
-
-    ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
-    ctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
-  }
-
-  ctx.restore();
 }

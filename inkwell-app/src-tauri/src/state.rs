@@ -7,7 +7,8 @@ use inkwell_pdf::Pdfium;
 
 pub enum WalOp {
     Append(WalEntry),
-    Truncate,
+    Truncate(Option<std::sync::mpsc::SyncSender<()>>),
+    Discard(Option<std::sync::mpsc::SyncSender<()>>),
     Close,
 }
 

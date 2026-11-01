@@ -104,7 +104,8 @@ export function initDocScrollbar(viewport) {
     e.stopPropagation();
     _isDraggingThumb = true;
     _startDragY = e.clientY;
-    _startPanY = viewport.panY;
+    const targetPane = viewport.activePane || 'left';
+    _startPanY = (targetPane === 'right' && viewport.splitMode) ? viewport.rightPanY : viewport.panY;
     scrollbar.classList.add('dragging');
     if (tooltip) tooltip.classList.remove('hidden');
     window.addEventListener('pointermove', onThumbMove);
@@ -121,10 +122,13 @@ export function initDocScrollbar(viewport) {
     const thumbH = _cachedThumbH || 28;
     const scrollableTrack = Math.max(1, trackH - thumbH);
 
+    const targetPane = viewport.activePane || 'left';
+    const isRight = targetPane === 'right' && viewport.splitMode;
+    const curPanX = isRight ? viewport.rightPanX : viewport.panX;
     const panDelta = (dy / scrollableTrack) * (docTotalH - stageH);
-    viewport.setPan(viewport.panX, _startPanY - panDelta, 'left');
+    viewport.setPan(curPanX, _startPanY - panDelta, targetPane);
 
-    const curPage = viewport.getActivePageInView('left');
+    const curPage = viewport.getActivePageInView(targetPane);
     if (tooltip) {
       tooltip.textContent = `Page ${curPage + 1} / ${state.pageInfos.length || 1}`;
       const topPos = (_cachedThumbTop || 0) + thumbH / 2;

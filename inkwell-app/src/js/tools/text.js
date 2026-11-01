@@ -15,12 +15,28 @@ export function onTextToolClick(e, ptWorld, pane, viewport) {
   const pageCoord = viewport.worldToPage(ptWorld[0], ptWorld[1]);
   const activeSheet = pageCoord.sheet;
   const pl = viewport.getPageLayout(activeSheet);
+  const px = ptWorld[0] - pl.x;
+  const py = ptWorld[1] - pl.y;
+
+  // Check if clicking directly on an existing non-deleted text note on activeSheet
+  const hit = (state.textObjects || []).find(t => {
+    if (t.deleted || t.sheet !== activeSheet) return false;
+    const w = t.width || 140;
+    const h = t.height || 32;
+    return px >= t.x - 6 && px <= t.x + w + 6 && py >= t.y - 6 && py <= t.y + h + 6;
+  });
+
+  if (hit) {
+    _isNewNote = false;
+    startEditing(hit, viewport, pane);
+    return;
+  }
 
   const newTextObj = {
     id: 'txt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     sheet: activeSheet,
-    x: ptWorld[0] - pl.x,
-    y: ptWorld[1] - pl.y,
+    x: px,
+    y: py,
     text: '',
     fontSize: 16,
     color: state.textColor || '#141724',
@@ -35,8 +51,9 @@ export function onTextToolClick(e, ptWorld, pane, viewport) {
   startEditing(newTextObj, viewport, pane);
 }
 
-export function startEditing(textObj, viewport, pane = 'left') {
+export function startEditing(textObj, viewport, pane = 'left', options = {}) {
   _activeEditingObj = textObj;
+  if (options && options.isNew !== undefined) _isNewNote = !!options.isNew;
   const editor = $('inlineTextEditor');
   const textarea = $('inlineTextarea');
   if (!editor || !textarea || !viewport) return;

@@ -99,9 +99,10 @@ export async function fetchTile(page, rect, px) {
       const raw = await ipc.fetchTile(page, rect, px);
       if (!raw) return null;
 
-      const rw = rect[2] - rect[0];
-      const rh = rect[3] - rect[1];
-      const scale = px / Math.max(rw, rh);
+      const rw = Math.max(1.0, rect[2] - rect[0]);
+      const rh = Math.max(1.0, rect[3] - rect[1]);
+      const baseSpan = (rw <= 512.0 && rh <= 512.0) ? 512.0 : Math.max(rw, rh);
+      const scale = px / baseSpan;
       const tileW = Math.round(rw * scale) || 1;
       const tileH = Math.round(rh * scale) || 1;
       const expectedBytes = tileW * tileH * 4;
@@ -184,7 +185,7 @@ export function drawTileData(ctx, data, tr, pl, pane, pi, viewport, dpr, clipPan
   ctx.restore();
 }
 
-export async function redrawTilesForPage(ctx, pane, pi, pl, viewport, dpr, bounds, clipPaneFn) {
+export async function redrawTilesForPage(ctx, pane, pi, pl, viewport, dpr, bounds, clipPaneFn, isCurrentEpoch = () => true) {
   if (!ctx || !viewport || !pl || !pi) return;
 
   const [wx0, wy0] = viewport.screenToWorld(bounds.x, bounds.y, pane);
@@ -210,17 +211,22 @@ export async function redrawTilesForPage(ctx, pane, pi, pl, viewport, dpr, bound
 
     const trKey = `${pl.sheet}:${tr.join(',')}:${px}`;
     if (tileCache.has(trKey)) {
-      drawTileData(ctx, tileCache.get(trKey), tr, pl, pane, pi, viewport, dpr, clipPaneFn);
+      const cached = tileCache.get(trKey);
+      tileCache.delete(trKey);
+      tileCache.set(trKey, cached);
+      if (isCurrentEpoch()) {
+        drawTileData(ctx, cached, tr, pl, pane, pi, viewport, dpr, clipPaneFn);
+      }
       return;
     }
 
     const fallback = findCachedTileFallback(pl.sheet, tr);
-    if (fallback) {
+    if (fallback && isCurrentEpoch()) {
       drawTileData(ctx, fallback, tr, pl, pane, pi, viewport, dpr, clipPaneFn);
     }
 
     const result = await fetchTile(pl.sheet, tr, px);
-    if (!result || !result.data) return;
+    if (!result || !result.data || !isCurrentEpoch()) return;
 
     const visibleNow = viewport.getVisiblePages(pane);
     if (visibleNow.some(v => v.sheet === pl.sheet)) {

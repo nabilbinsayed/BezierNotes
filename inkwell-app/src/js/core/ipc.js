@@ -4,7 +4,7 @@
  * Keeps Tauri-specific invocation logic isolated from other domain modules.
  * ========================================================================== */
 
-import { warnDurability } from './state.js';
+import { state, warnDurability } from './state.js';
 
 export function getInvoke() {
   if (typeof window === 'undefined') return null;
@@ -81,6 +81,12 @@ export async function savePdf(pathStr, strokes, images, texts) {
       italic: !!t.italic,
       width: t.width || 120,
       height: t.height || 30,
+    })),
+    bookmarks: (state.bookmarks || []).map(b => ({
+      id: String(b.id),
+      page: Number(b.page) || 0,
+      label: String(b.label || ''),
+      created_at: Number(b.createdAt || b.created_at || 0),
     })),
   };
   if (!pathStr) {
@@ -215,6 +221,10 @@ export async function reorderPages(fromIndex, toIndex) {
 
 export async function duplicatePage(pageIndex) {
   return await invokeTauri('duplicate_page', { index: pageIndex });
+}
+
+export async function rotatePage(pageIndex, clockwise = true) {
+  return await invokeTauri('rotate_page', { index: pageIndex, clockwise });
 }
 
 // ---- Native Stylus evdev Hardware Stream ----

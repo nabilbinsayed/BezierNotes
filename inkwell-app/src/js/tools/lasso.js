@@ -49,6 +49,8 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
       x: t.x,
       y: t.y,
       fontSize: t.fontSize || 16,
+      width: t.width || 140,
+      height: t.height || 32,
     }));
     for (const s of (state.selectedStrokes || [])) {
       if (typeof s.getPath2D === 'function') {
@@ -107,6 +109,8 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
         x: t.x,
         y: t.y,
         fontSize: t.fontSize || 16,
+        width: t.width || 140,
+        height: t.height || 32,
       }));
       for (const s of (state.selectedStrokes || [])) {
         if (typeof s.getPath2D === 'function') {
@@ -324,6 +328,18 @@ export function onLassoUp(e, viewport) {
               t.x = rcx - pl.x - (t.width || 120) / 2;
               t.y = rcy - pl.y - (t.height || 32) / 2;
             }
+          } else {
+            const pl = viewport.getPageLayout(t.sheet || 0);
+            const wx = pl.x + init.x;
+            const wy = pl.y + init.y;
+            const nwx = originX + (wx - originX) * scaleX;
+            const nwy = originY + (wy - originY) * scaleY;
+            t.x = nwx - pl.x;
+            t.y = nwy - pl.y;
+            const avgScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+            t.fontSize = Math.max(8, Math.min(72, Math.round((init.fontSize || 16) * avgScale)));
+            t.width = Math.max(30, Math.round((init.width || 140) * Math.abs(scaleX)));
+            t.height = Math.max(16, Math.round((init.height || 32) * Math.abs(scaleY)));
           }
         }
       }
@@ -361,7 +377,14 @@ export function onLassoUp(e, viewport) {
         dataUrl: img.dataUrl || img.data_url || '',
         data_url: img.dataUrl || img.data_url || '',
       })),
-      finalTextObjects: (state.selectedTextObjects || []).map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
+      finalTextObjects: (state.selectedTextObjects || []).map(t => ({
+        id: t.id,
+        x: t.x,
+        y: t.y,
+        fontSize: t.fontSize,
+        width: t.width,
+        height: t.height
+      })),
     }, { recordHistory: true });
 
     state.transformMode = null;
@@ -641,7 +664,15 @@ function renderWetTransform(pane, viewport) {
     imagesBySheet.get(sheet).push(img);
   }
 
-  const allSheets = new Set([...strokesBySheet.keys(), ...imagesBySheet.keys()]);
+  const textsBySheet = new Map();
+  for (const t of (state.selectedTextObjects || [])) {
+    if (t.deleted) continue;
+    const sheet = t.sheet || 0;
+    if (!textsBySheet.has(sheet)) textsBySheet.set(sheet, []);
+    textsBySheet.get(sheet).push(t);
+  }
+
+  const allSheets = new Set([...strokesBySheet.keys(), ...imagesBySheet.keys(), ...textsBySheet.keys()]);
   for (const sheet of allSheets) {
     const pl = viewport.getPageLayout(sheet);
     if (!pl) continue;
@@ -675,6 +706,24 @@ function renderWetTransform(pane, viewport) {
           wctx.drawImage(el, img.x, img.y, img.width, img.height);
         } catch (_) {}
       }
+    }
+
+    const sheetTexts = textsBySheet.get(sheet) || [];
+    for (const t of sheetTexts) {
+      if (!t.text) continue;
+      wctx.save();
+      wctx.fillStyle = t.color || '#141724';
+      const weight = t.bold ? 'bold ' : '';
+      const slant = t.italic ? 'italic ' : '';
+      const size = t.fontSize || t.font_size || 16;
+      wctx.font = `${slant}${weight}${size}px Inter, system-ui, -apple-system, sans-serif`;
+      wctx.textBaseline = 'top';
+      const lines = (t.text || '').split('\n');
+      const lineHeight = size * 1.35;
+      lines.forEach((line, idx) => {
+        wctx.fillText(line, t.x, t.y + idx * lineHeight);
+      });
+      wctx.restore();
     }
 
     const sheetStrokes = strokesBySheet.get(sheet) || [];

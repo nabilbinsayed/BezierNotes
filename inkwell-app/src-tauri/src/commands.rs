@@ -17,10 +17,22 @@ fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
                         eprintln!("[inkwell] Background WAL append error: {e}");
                     }
                 }
-                WalOp::Truncate => {
+                WalOp::Truncate(ack) => {
                     if let Err(e) = wal.truncate() {
                         eprintln!("[inkwell] Background WAL truncate error: {e}");
                     }
+                    if let Some(sender) = ack {
+                        let _ = sender.send(());
+                    }
+                }
+                WalOp::Discard(ack) => {
+                    if let Err(e) = wal.truncate() {
+                        eprintln!("[inkwell] Background WAL discard truncate error: {e}");
+                    }
+                    if let Some(sender) = ack {
+                        let _ = sender.send(());
+                    }
+                    break;
                 }
                 WalOp::Close => break,
             }
@@ -144,6 +156,8 @@ pub struct OpenPdfResult {
     pub loaded_images: Vec<FrontendImage>,
     pub loaded_texts: Vec<FrontendText>,
     pub outline: Vec<inkwell_pdf::TocItem>,
+    #[serde(default)]
+    pub bookmarks: Vec<inkwell_core::doc::Bookmark>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,6 +308,7 @@ pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) 
 fn replay_wal_journal(
     path: &Path,
     doc: &mut Document,
+    page_infos: &mut Vec<PageInfo>,
 ) -> (usize, usize, usize, Vec<FrontendImage>, Vec<FrontendText>) {
     let wp = wal_path_for(path);
     let mut recovered_strokes = 0usize;
@@ -314,21 +329,106 @@ fn replay_wal_journal(
                     WalEntry::Removed(id) => {
                         doc.remove_stroke(id);
                     }
-                    WalEntry::PageInserted { index, .. } => {
+                    WalEntry::PageInserted { index, width_pt, height_pt } => {
                         doc.insert_sheet(index);
+                        let clamped = index.min(page_infos.len());
+                        page_infos.insert(clamped, PageInfo {
+                            page_index: clamped,
+                            width_pt,
+                            height_pt,
+                            template: None,
+                        });
+                        for (i, p) in page_infos.iter_mut().enumerate() {
+                            p.page_index = i;
+                        }
                     }
                     WalEntry::PageDeleted { index } => {
                         if index < doc.sheets.len() && doc.sheets.len() > 1 {
                             doc.sheets.remove(index);
+                            if index < page_infos.len() {
+                                page_infos.remove(index);
+                                for (i, p) in page_infos.iter_mut().enumerate() {
+                                    p.page_index = i;
+                                }
+                            }
                         }
                     }
                     WalEntry::PageReordered { from_index, to_index } => {
                         if from_index < doc.sheets.len() && to_index < doc.sheets.len() && from_index != to_index {
                             let sheet = doc.sheets.remove(from_index);
                             doc.sheets.insert(to_index, sheet);
+                            if from_index < page_infos.len() && to_index < page_infos.len() {
+                                let p = page_infos.remove(from_index);
+                                page_infos.insert(to_index, p);
+                                for (i, p) in page_infos.iter_mut().enumerate() {
+                                    p.page_index = i;
+                                }
+                            }
                         }
                     }
-                    WalEntry::PageRotated { .. } => {}
+                    WalEntry::PageRotated { index, clockwise } => {
+                        let (orig_w, orig_h) = if let Some(pi) = page_infos.get_mut(index) {
+                            let w = pi.width_pt;
+                            let h = pi.height_pt;
+                            std::mem::swap(&mut pi.width_pt, &mut pi.height_pt);
+                            (w, h)
+                        } else {
+                            (595.0, 842.0)
+                        };
+                        if let Some(sheet) = doc.sheets.get_mut(index) {
+                            for l in &mut sheet.layers {
+                                for s in &mut l.strokes {
+                                    for sample in &mut s.samples {
+                                        if clockwise {
+                                            let old_x = sample.x;
+                                            let old_y = sample.y;
+                                            sample.x = orig_h - old_y;
+                                            sample.y = old_x;
+                                        } else {
+                                            let old_x = sample.x;
+                                            let old_y = sample.y;
+                                            sample.x = old_y;
+                                            sample.y = orig_w - old_x;
+                                        }
+                                    }
+                                }
+                            }
+                            for img in &mut sheet.images {
+                                let old_x = img.x;
+                                let old_y = img.y;
+                                let old_w = img.width;
+                                let old_h = img.height;
+                                if clockwise {
+                                    img.x = orig_h - old_y - old_h;
+                                    img.y = old_x;
+                                    img.width = old_h;
+                                    img.height = old_w;
+                                } else {
+                                    img.x = old_y;
+                                    img.y = orig_w - old_x - old_w;
+                                    img.width = old_h;
+                                    img.height = old_w;
+                                }
+                            }
+                            for txt in &mut sheet.text_objects {
+                                let old_x = txt.x;
+                                let old_y = txt.y;
+                                let old_w = txt.width;
+                                let old_h = txt.height;
+                                if clockwise {
+                                    txt.x = orig_h - old_y - old_h;
+                                    txt.y = old_x;
+                                    txt.width = old_h;
+                                    txt.height = old_w;
+                                } else {
+                                    txt.x = old_y;
+                                    txt.y = orig_w - old_x - old_w;
+                                    txt.width = old_h;
+                                    txt.height = old_w;
+                                }
+                            }
+                        }
+                    }
                     WalEntry::ImageAdded { sheet, id, x, y, width, height, data_url } => {
                         doc.push_image(sheet, inkwell_core::doc::ImageObject {
                             id: id.clone(),
@@ -371,12 +471,41 @@ fn replay_wal_journal(
             }
         }
     }
+
+    let wal_images: Vec<FrontendImage> = doc.sheets.iter().enumerate().flat_map(|(s_idx, s)| {
+        s.images.iter().filter(|im| images_map.contains_key(&im.id)).map(move |img| FrontendImage {
+            id: img.id.clone(),
+            sheet: s_idx,
+            x: img.x,
+            y: img.y,
+            width: img.width,
+            height: img.height,
+            data_url: img.data_url.clone(),
+        })
+    }).collect();
+
+    let wal_texts: Vec<FrontendText> = doc.sheets.iter().enumerate().flat_map(|(s_idx, s)| {
+        s.text_objects.iter().filter(|tx| texts_map.contains_key(&tx.id)).map(move |txt| FrontendText {
+            id: txt.id.clone(),
+            sheet: s_idx,
+            x: txt.x,
+            y: txt.y,
+            text: txt.text.clone(),
+            font_size: txt.font_size,
+            color: txt.color.clone(),
+            bold: txt.bold,
+            italic: txt.italic,
+            width: txt.width,
+            height: txt.height,
+        })
+    }).collect();
+
     (
         recovered_strokes,
         recovered_images,
         recovered_texts,
-        images_map.into_values().collect(),
-        texts_map.into_values().collect(),
+        wal_images,
+        wal_texts,
     )
 }
 
@@ -424,7 +553,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
 
     // Replay WAL entries if journal exists from a previous crash
     let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
-        replay_wal_journal(&path, &mut doc);
+        replay_wal_journal(&path, &mut doc, &mut page_infos);
 
     let mut loaded_images = extract_frontend_images(&doc);
     let mut loaded_texts = extract_frontend_texts(&doc);
@@ -443,6 +572,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
+    let doc_bookmarks = doc.bookmarks.clone();
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
@@ -480,6 +610,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         loaded_images,
         loaded_texts,
         outline,
+        bookmarks: doc_bookmarks,
     })
 }
 
@@ -508,9 +639,22 @@ pub async fn create_blank_document(
             ).map_err(|e| e.to_string())?;
             doc.save_to_bytes().map_err(|e| e.to_string())?
         } else {
-            format!(
-"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources <<>> >>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n215\n%%EOF\n", w, h
-            ).into_bytes()
+            let header = "%PDF-1.7\n";
+            let obj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+            let obj2 = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+            let obj3 = format!(
+                "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources <<>> >>\nendobj\n",
+                w, h
+            );
+            let off1 = header.len();
+            let off2 = off1 + obj1.len();
+            let off3 = off2 + obj2.len();
+            let startxref = off3 + obj3.len();
+            let xref_and_trailer = format!(
+                "xref\n0 4\n0000000000 65535 f \n{:010} 00000 n \n{:010} 00000 n \n{:010} 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                off1, off2, off3, startxref
+            );
+            format!("{header}{obj1}{obj2}{obj3}{xref_and_trailer}").into_bytes()
         }
     };
 
@@ -564,7 +708,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     }
 
     let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
-        replay_wal_journal(&path, &mut doc);
+        replay_wal_journal(&path, &mut doc, &mut page_infos);
 
     let mut loaded_images = extract_frontend_images(&doc);
     let mut loaded_texts = extract_frontend_texts(&doc);
@@ -583,6 +727,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
+    let doc_bookmarks = doc.bookmarks.clone();
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
@@ -619,6 +764,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         loaded_images,
         loaded_texts,
         outline,
+        bookmarks: doc_bookmarks,
     })
 }
 
@@ -640,7 +786,10 @@ pub async fn render_tile(
 
     let rw = (rect[2] - rect[0]).max(1.0);
     let rh = (rect[3] - rect[1]).max(1.0);
-    let scale = (px as f64) / rw.max(rh);
+    // Standardize scale against the 512pt grid tile size when px >= 64 and rw/rh <= 512,
+    // so boundary-clipped tiles (< 512pt wide/tall) hit the same cached full-page bitmap.
+    let base_span = if rw <= 512.0 && rh <= 512.0 { 512.0 } else { rw.max(rh) };
+    let scale = (px as f64) / base_span;
 
     // Get an atomic Arc clone under a short-lived lock (zero heap allocation)
     let arc_bytes = state
@@ -1025,6 +1174,7 @@ pub async fn save_pdf(
     images: Option<Vec<FrontendImage>>,
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
+    bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // If frontend provided the active stroke list, sync doc state completely
@@ -1118,6 +1268,13 @@ pub async fn save_pdf(
         }
     }
 
+    if let Some(ref bm_list) = bookmarks {
+        let mut doc_guard = state.doc.lock().unwrap();
+        if let Some(doc) = doc_guard.as_mut() {
+            doc.bookmarks = bm_list.clone();
+        }
+    }
+
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
@@ -1187,7 +1344,9 @@ pub async fn save_pdf(
 
     if is_save_as {
         if let Some(old_tx) = state.wal.lock().unwrap().take() {
-            let _ = old_tx.send(WalOp::Close);
+            let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+            let _ = old_tx.send(WalOp::Discard(Some(ack_tx)));
+            let _ = ack_rx.recv_timeout(std::time::Duration::from_millis(500));
         }
         let wp = wal_path_for(&target_path);
         match Wal::open(&wp) {
@@ -1204,7 +1363,9 @@ pub async fn save_pdf(
     state.is_dirty.store(false, std::sync::atomic::Ordering::Relaxed);
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Truncate);
+        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+        let _ = tx.send(WalOp::Truncate(Some(ack_tx)));
+        let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
     }
 
     Ok(target_path.to_string_lossy().to_string())
@@ -1215,6 +1376,7 @@ pub async fn save_pdf_dialog(
     images: Option<Vec<FrontendImage>>,
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
+    bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -1231,7 +1393,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), images, strokes, texts, state).await
+        save_pdf(Some(path_str), images, strokes, texts, bookmarks, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -1305,14 +1467,9 @@ pub async fn insert_blank_page(
         return Err(format!("Invalid page dimensions: {width_pt} x {height_pt} pt (must be between 72 and 14400)"));
     }
 
-    let mut doc_guard = state.doc.lock().unwrap();
-    let doc = doc_guard.as_mut().ok_or("No document open")?;
-
-    doc.insert_sheet(index);
-
-    // If we have base PDF bytes, insert a blank page into the PDF bytes as well
+    // 1. Run fallible PDFium operation first
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
-    if let Some(bytes) = orig_bytes_opt {
+    let maybe_new_bytes = if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
         let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available for page insertion")?;
         use pdfium_render::prelude::*;
@@ -1327,6 +1484,17 @@ pub async fn insert_blank_page(
         ).map_err(|e| format!("PDFium create_page_at_index failed: {e:?}"))?;
         let new_bytes = pdf_doc.save_to_bytes()
             .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+        Some(new_bytes)
+    } else {
+        None
+    };
+
+    // 2. Only mutate doc state after PDFium succeeds
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    doc.insert_sheet(index);
+
+    if let Some(new_bytes) = maybe_new_bytes {
         *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
         *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
     }
@@ -1550,14 +1718,16 @@ pub async fn delete_page(
     index: usize,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let mut doc_guard = state.doc.lock().unwrap();
-    let doc = doc_guard.as_mut().ok_or("No document open")?;
-    if !doc.delete_sheet(index) {
-        return Err(format!("Cannot delete page {index} (page out of bounds or only remaining page)"));
+    {
+        let doc_guard = state.doc.lock().unwrap();
+        let doc = doc_guard.as_ref().ok_or("No document open")?;
+        if doc.sheets.len() <= 1 || index >= doc.sheets.len() {
+            return Err(format!("Cannot delete page {index} (page out of bounds or only remaining page)"));
+        }
     }
 
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
-    if let Some(bytes) = orig_bytes_opt {
+    let maybe_new_bytes = if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
         if let Some(pdfium) = pdfium_guard.as_ref() {
             let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
@@ -1584,9 +1754,23 @@ pub async fn delete_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
-            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            Some(new_bytes)
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    if !doc.delete_sheet(index) {
+        return Err(format!("Cannot delete page {index} (page out of bounds or only remaining page)"));
+    }
+
+    if let Some(new_bytes) = maybe_new_bytes {
+        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+        *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
@@ -1607,15 +1791,20 @@ pub async fn duplicate_page(
     index: usize,
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
-    let mut doc_guard = state.doc.lock().unwrap();
-    let doc = doc_guard.as_mut().ok_or("No document open")?;
-    let target_idx = doc.duplicate_sheet(index).ok_or_else(|| format!("Page index {index} out of bounds"))?;
+    let target_idx = index + 1;
+    {
+        let doc_guard = state.doc.lock().unwrap();
+        let doc = doc_guard.as_ref().ok_or("No document open")?;
+        if index >= doc.sheets.len() {
+            return Err(format!("Page index {index} out of bounds"));
+        }
+    }
 
     let mut out_w = 595.0;
     let mut out_h = 842.0;
 
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
-    if let Some(bytes) = orig_bytes_opt {
+    let maybe_new_bytes = if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
         if let Some(pdfium) = pdfium_guard.as_ref() {
             let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
@@ -1634,9 +1823,27 @@ pub async fn duplicate_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
-            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            Some(new_bytes)
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    doc.duplicate_sheet(index).ok_or_else(|| format!("Page index {index} out of bounds"))?;
+
+    let cloned_strokes: Vec<_> = doc.sheets.get(target_idx).map(|s| s.strokes().cloned().collect()).unwrap_or_default();
+    let cloned_images: Vec<_> = doc.sheets.get(target_idx).map(|s| s.images.clone()).unwrap_or_default();
+    let cloned_texts: Vec<_> = doc.sheets.get(target_idx).map(|s| s.text_objects.clone()).unwrap_or_default();
+    let cloned_template = doc.sheets.get(target_idx).and_then(|s| s.template.clone());
+    drop(doc_guard);
+
+    if let Some(new_bytes) = maybe_new_bytes {
+        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+        *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
@@ -1650,12 +1857,36 @@ pub async fn duplicate_page(
             width_pt: out_w,
             height_pt: out_h,
         }));
+        for stroke in cloned_strokes {
+            let _ = tx.send(WalOp::Append(WalEntry::Added { sheet: target_idx, stroke }));
+        }
+        for img in cloned_images {
+            let _ = tx.send(WalOp::Append(WalEntry::ImageAdded {
+                sheet: target_idx,
+                id: img.id,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                data_url: img.data_url,
+            }));
+        }
+        for txt in cloned_texts {
+            let _ = tx.send(WalOp::Append(WalEntry::TextUpsert {
+                sheet: target_idx,
+                id: txt.id,
+                x: txt.x,
+                y: txt.y,
+                text: txt.text,
+                font_size: txt.font_size,
+                color: txt.color,
+                bold: txt.bold,
+                italic: txt.italic,
+                width: txt.width,
+                height: txt.height,
+            }));
+        }
     }
-
-    let cloned_template = {
-        let doc_guard = state.doc.lock().unwrap();
-        doc_guard.as_ref().and_then(|d| d.sheets.get(target_idx).and_then(|s| s.template.clone()))
-    };
 
     Ok(PageInfo {
         page_index: target_idx,
@@ -1672,8 +1903,8 @@ pub async fn rotate_page(
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
-    let mut out_w = 595.0;
-    let mut out_h = 842.0;
+    let mut orig_w = 595.0;
+    let mut orig_h = 842.0;
 
     if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
@@ -1681,15 +1912,13 @@ pub async fn rotate_page(
             let mut pdf_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
                 .map_err(|e| format!("PDFium failed to load PDF for rotation: {e:?}"))?;
             if let Ok(mut page) = pdf_doc.pages_mut().get(index as i32) {
-                let orig_w = page.width().value as f64;
-                let orig_h = page.height().value as f64;
+                orig_w = page.width().value as f64;
+                orig_h = page.height().value as f64;
                 if clockwise {
                     let _ = page.rotate_clockwise_degrees(90.0);
                 } else {
                     let _ = page.rotate_counter_clockwise_degrees(90.0);
                 }
-                out_w = orig_h;
-                out_h = orig_w;
             }
             let new_bytes = pdf_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
@@ -1697,6 +1926,72 @@ pub async fn rotate_page(
             *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
         }
     }
+
+    let out_w = orig_h;
+    let out_h = orig_w;
+
+    let mut doc_guard = state.doc.lock().unwrap();
+    let rot_template = if let Some(doc) = doc_guard.as_mut() {
+        if let Some(sheet) = doc.sheets.get_mut(index) {
+            for l in &mut sheet.layers {
+                for s in &mut l.strokes {
+                    for sample in &mut s.samples {
+                        if clockwise {
+                            let old_x = sample.x;
+                            let old_y = sample.y;
+                            sample.x = orig_h - old_y;
+                            sample.y = old_x;
+                        } else {
+                            let old_x = sample.x;
+                            let old_y = sample.y;
+                            sample.x = old_y;
+                            sample.y = orig_w - old_x;
+                        }
+                    }
+                }
+            }
+            for img in &mut sheet.images {
+                let old_x = img.x;
+                let old_y = img.y;
+                let old_w = img.width;
+                let old_h = img.height;
+                if clockwise {
+                    img.x = orig_h - old_y - old_h;
+                    img.y = old_x;
+                    img.width = old_h;
+                    img.height = old_w;
+                } else {
+                    img.x = old_y;
+                    img.y = orig_w - old_x - old_w;
+                    img.width = old_h;
+                    img.height = old_w;
+                }
+            }
+            for txt in &mut sheet.text_objects {
+                let old_x = txt.x;
+                let old_y = txt.y;
+                let old_w = txt.width;
+                let old_h = txt.height;
+                if clockwise {
+                    txt.x = orig_h - old_y - old_h;
+                    txt.y = old_x;
+                    txt.width = old_h;
+                    txt.height = old_w;
+                } else {
+                    txt.x = old_y;
+                    txt.y = orig_w - old_x - old_w;
+                    txt.width = old_h;
+                    txt.height = old_w;
+                }
+            }
+            sheet.template.clone()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    drop(doc_guard);
 
     state.page_bitmap_cache.lock().unwrap().clear();
     if let Ok(mut dims) = state.page_dimensions.lock() {
@@ -1708,11 +2003,6 @@ pub async fn rotate_page(
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
-
-    let rot_template = {
-        let doc_guard = state.doc.lock().unwrap();
-        doc_guard.as_ref().and_then(|d| d.sheets.get(index).and_then(|s| s.template.clone()))
-    };
 
     Ok(PageInfo {
         page_index: index,
@@ -1728,19 +2018,27 @@ pub async fn reorder_page(
     to_index: usize,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let mut doc_guard = state.doc.lock().unwrap();
-    let doc = doc_guard.as_mut().ok_or("No document open")?;
-    if !doc.reorder_sheet(from_index, to_index) {
-        return Err("Page indices out of bounds".to_string());
+    if from_index == to_index {
+        return Ok(true);
+    }
+    {
+        let doc_guard = state.doc.lock().unwrap();
+        let doc = doc_guard.as_ref().ok_or("No document open")?;
+        if from_index >= doc.sheets.len() || to_index >= doc.sheets.len() {
+            return Err("Page indices out of bounds".to_string());
+        }
     }
 
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
-    if let Some(bytes) = orig_bytes_opt {
+    let maybe_new_bytes = if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
         if let Some(pdfium) = pdfium_guard.as_ref() {
             let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
                 .map_err(|e| format!("PDFium failed to load src PDF for reorder: {e:?}"))?;
             let total_pages = src_doc.pages().len() as usize;
+            if from_index >= total_pages || to_index >= total_pages {
+                return Err("Page indices out of bounds for PDF".to_string());
+            }
             let mut page_indices: Vec<i32> = (0..total_pages as i32).collect();
             let moved = page_indices.remove(from_index);
             page_indices.insert(to_index, moved);
@@ -1756,9 +2054,23 @@ pub async fn reorder_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
-            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            Some(new_bytes)
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    if !doc.reorder_sheet(from_index, to_index) {
+        return Err("Page indices out of bounds".to_string());
+    }
+
+    if let Some(new_bytes) = maybe_new_bytes {
+        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+        *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();

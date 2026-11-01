@@ -9,6 +9,7 @@ import * as ipc from '../core/ipc.js';
 import * as textSelection from '../workspace/text-selection.js';
 import * as compositor from '../render/compositor.js';
 import * as documentOps from '../core/document.js';
+import * as annotations from '../workspace/annotations.js';
 
 let _goToPageCallback = null;
 
@@ -28,7 +29,7 @@ function bindRailButtons() {
   $('btnRailOutline') && $('btnRailOutline').addEventListener('click', () => toggleDrawer('outline'));
   $('btnRailSearch') && $('btnRailSearch').addEventListener('click', () => toggleDrawer('search'));
   $('btnRailBookmarks') && $('btnRailBookmarks').addEventListener('click', () => toggleDrawer('bookmarks'));
-  $('btnRailLayers') && $('btnRailLayers').addEventListener('click', () => toggleDrawer('layers'));
+  $('btnRailAnnotations') && $('btnRailAnnotations').addEventListener('click', () => toggleDrawer('annotations'));
   $('btnRailDocInfo') && $('btnRailDocInfo').addEventListener('click', () => toggleDrawer('docinfo'));
   $('btnRailSettings') && $('btnRailSettings').addEventListener('click', () => {
     const modal = $('settingsModal');
@@ -114,9 +115,9 @@ export function openDrawer(drawerName) {
   state.activeDrawer = drawerName;
   drawer.classList.remove('hidden');
 
-  // Highlight active rail button
+  // Highlight active rail button (preserving split button state)
   document.querySelectorAll('.rail-btn').forEach(btn => {
-    btn.classList.remove('active');
+    if (btn.id !== 'btnRailSplit') btn.classList.remove('active');
   });
 
   const btnMap = {
@@ -124,7 +125,7 @@ export function openDrawer(drawerName) {
     outline: $('btnRailOutline'),
     search: $('btnRailSearch'),
     bookmarks: $('btnRailBookmarks'),
-    layers: $('btnRailLayers'),
+    annotations: $('btnRailAnnotations'),
     docinfo: $('btnRailDocInfo'),
   };
 
@@ -132,8 +133,9 @@ export function openDrawer(drawerName) {
   if (activeBtn) activeBtn.classList.add('active');
 
   // Show corresponding drawer pane
-  document.querySelectorAll('.drawer-view').forEach(view => view.classList.add('hidden'));
-  const targetView = $(`drawerView_${drawerName}`) || $(`drawer${drawerName.charAt(0).toUpperCase() + drawerName.slice(1)}`);
+  document.querySelectorAll('.drawer-content').forEach(view => view.classList.add('hidden'));
+  const targetId = drawerName === 'docinfo' ? 'drawerDocInfo' : `drawer${drawerName.charAt(0).toUpperCase() + drawerName.slice(1)}`;
+  const targetView = $(`drawerView_${drawerName}`) || $(targetId);
   if (targetView) targetView.classList.remove('hidden');
 
   const titleEl = $('drawerTitle');
@@ -144,7 +146,7 @@ export function openDrawer(drawerName) {
       search: 'Search in Document',
       bookmarks: 'Bookmarks',
       docinfo: 'Document Details',
-      layers: 'Vector Layers',
+      annotations: 'Annotations & Review',
       settings: 'Preferences',
     };
     titleEl.textContent = titles[drawerName] || drawerName;
@@ -153,8 +155,55 @@ export function openDrawer(drawerName) {
   if (drawerName === 'thumbnails') renderThumbnails();
   else if (drawerName === 'outline') renderOutline();
   else if (drawerName === 'bookmarks') renderBookmarks();
+  else if (drawerName === 'docinfo') renderDocInfo();
+  else if (drawerName === 'annotations') annotations.renderAnnotations();
 
   emit('drawerOpened', { drawer: drawerName });
+}
+
+export function renderDocInfo() {
+  const titleEl = $('docInfoTitle');
+  if (titleEl) {
+    titleEl.textContent = state.currentDocTitle || (state.filePath ? state.filePath.split(/[\\/]/).pop() : 'Untitled.pdf');
+  }
+
+  const statPages = $('docStatPages');
+  if (statPages) {
+    statPages.textContent = String((state.pageInfos && state.pageInfos.length) || 1);
+  }
+
+  const statStrokes = $('docStatStrokes');
+  if (statStrokes) {
+    const activeStrokes = (state.strokes || []).filter(s => !s.deleted).length;
+    statStrokes.textContent = String(activeStrokes);
+  }
+
+  const curPage = state.leftSheet != null ? state.leftSheet : 0;
+  const statCurPage = $('docStatCurrentPage');
+  if (statCurPage) {
+    statCurPage.textContent = `Page ${curPage + 1}`;
+  }
+
+  const statDims = $('docStatDimensions');
+  if (statDims) {
+    const pi = state.pageInfos && state.pageInfos[curPage];
+    if (pi && pi.width_pt && pi.height_pt) {
+      statDims.textContent = `${Math.round(pi.width_pt)} × ${Math.round(pi.height_pt)} pt`;
+    } else {
+      statDims.textContent = 'A4 Portrait';
+    }
+  }
+
+  // Update hardware telemetry badge defaults if not yet emitted
+  const diagPointer = $('diagPointerType');
+  if (diagPointer && (!diagPointer.textContent || diagPointer.textContent === 'Scanning...')) {
+    diagPointer.textContent = state.lastPointerType ? (state.lastPointerType.charAt(0).toUpperCase() + state.lastPointerType.slice(1)) : 'Mouse / Trackpad';
+  }
+
+  const diagDevice = $('diagActiveDevice');
+  if (diagDevice && (!diagDevice.textContent || diagDevice.textContent === 'Scanning...')) {
+    diagDevice.textContent = navigator.userAgentData?.platform || navigator.platform || 'Desktop Host';
+  }
 }
 
 export function closeDrawer() {
@@ -176,9 +225,7 @@ export function toggleDrawer(drawerName) {
 }
 
 function bindBookmarkEvents() {
-  const btn = $('btnAddBookmark');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
+  const addCurrentPageBookmark = () => {
     const activePage = state.leftSheet != null ? state.leftSheet : 0;
     if (!state.bookmarks) state.bookmarks = [];
     const exists = state.bookmarks.some(b => b.page === activePage);
@@ -193,9 +240,13 @@ function bindBookmarkEvents() {
       createdAt: Date.now(),
     });
     state.isDirty = true;
+    emit('documentChanged', { type: 'bookmark_change' });
     renderBookmarks();
     emit('toast', { message: `Bookmarked Page ${activePage + 1}`, type: 'success' });
-  });
+  };
+
+  $('btnAddBookmark') && $('btnAddBookmark').addEventListener('click', addCurrentPageBookmark);
+  $('btnOutlineAddBookmark') && $('btnOutlineAddBookmark').addEventListener('click', addCurrentPageBookmark);
 }
 
 export function renderBookmarks() {
@@ -245,6 +296,7 @@ export function renderBookmarks() {
       if (!bmId) return;
       state.bookmarks = (state.bookmarks || []).filter(b => String(b.id) !== String(bmId));
       state.isDirty = true;
+      emit('documentChanged', { type: 'bookmark_change' });
       renderBookmarks();
       emit('toast', { message: 'Bookmark removed', type: 'info' });
     });
@@ -266,13 +318,87 @@ async function handleDuplicatePage(idx) {
   }
 }
 
+async function handleRotatePage(idx, clockwise = true) {
+  try {
+    await ipc.rotatePage(idx, clockwise);
+    documentOps.rotatePageAtIndex(idx, clockwise);
+    if (typeof _goToPageCallback === 'function') {
+      _goToPageCallback(idx, 'left');
+    }
+    renderThumbnails();
+    compositor.scheduleRedrawTiles();
+    compositor.redrawAll();
+    emit('toast', { message: `Page ${idx + 1} rotated 90°`, type: 'success' });
+  } catch (err) {
+    console.error('[inkwell/drawers] rotatePage error:', err);
+    emit('toast', { message: 'Failed to rotate page: ' + (err.message || err), type: 'error' });
+  }
+}
+
+export function confirmDeletePageDialog(pageIndex) {
+  return new Promise(resolve => {
+    const modal = $('confirmDeletePageModal');
+    const msg = $('confirmDeletePageMsg');
+    const btnCancel = $('btnConfirmDeletePageCancel');
+    const btnConfirm = $('btnConfirmDeletePageConfirm');
+
+    if (!modal || !btnCancel || !btnConfirm) {
+      resolve(window.confirm(`Are you sure you want to delete Page ${pageIndex + 1}?`));
+      return;
+    }
+
+    if (msg) {
+      msg.textContent = `Are you sure you want to delete Page ${pageIndex + 1}? This action cannot be undone.`;
+    }
+
+    modal.classList.remove('hidden');
+
+    const cleanUp = () => {
+      btnCancel.removeEventListener('click', onCancel);
+      btnConfirm.removeEventListener('click', onConfirm);
+      modal.removeEventListener('click', onBackdrop);
+      window.removeEventListener('keydown', onKeyDown);
+      modal.classList.add('hidden');
+    };
+
+    const onCancel = () => {
+      cleanUp();
+      resolve(false);
+    };
+
+    const onConfirm = () => {
+      cleanUp();
+      resolve(true);
+    };
+
+    const onBackdrop = (e) => {
+      if (e.target === modal) {
+        cleanUp();
+        resolve(false);
+      }
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        cleanUp();
+        resolve(false);
+      }
+    };
+
+    btnCancel.addEventListener('click', onCancel);
+    btnConfirm.addEventListener('click', onConfirm);
+    modal.addEventListener('click', onBackdrop);
+    window.addEventListener('keydown', onKeyDown);
+  });
+}
+
 async function handleDeletePage(idx) {
   if (!state.pageInfos || state.pageInfos.length <= 1) {
     emit('toast', { message: 'Cannot delete the only remaining page', type: 'info' });
     return;
   }
 
-  const confirmed = window.confirm(`Are you sure you want to delete Page ${idx + 1}?`);
+  const confirmed = await confirmDeletePageDialog(idx);
   if (!confirmed) return;
 
   try {
@@ -306,11 +432,191 @@ async function handleReorderPage(fromIdx, toIdx) {
   }
 }
 
+let _thumbObserver = null;
+let _thumbQueue = new Map();
+let _thumbFrame = null;
+
+function countAnnotationsOnPage(pageIndex) {
+  let n = 0;
+  for (const s of state.strokes || []) {
+    if (!s.deleted && (s.sheet || 0) === pageIndex) n++;
+  }
+  for (const t of state.textObjects || []) {
+    if (!t.deleted && (t.sheet || 0) === pageIndex) n++;
+  }
+  for (const im of state.images || []) {
+    if (im.deleted || (im.sheet || 0) !== pageIndex) continue;
+    const id = String(im.id || '');
+    if (id.startsWith('template_bg_') || id.startsWith('img_template_bg_')) continue;
+    n++;
+  }
+  return n;
+}
+
+function drawThumbnailCanvas(canvas, idx, pi) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const thumbW = canvas.width;
+  const thumbH = canvas.height;
+  const scale = thumbW / (pi.width_pt || 595);
+
+  ctx.clearRect(0, 0, thumbW, thumbH);
+
+  // 1. Background template
+  templates.drawPageBackground(ctx, 0, 0, thumbW, thumbH, pi.template || 'blank', 1.0);
+
+  // 2. Images on this sheet (loaded elements are cached on _el / element)
+  const images = (state.images || []).filter(im => im.sheet === idx && !im.deleted);
+  for (const im of images) {
+    const el = im._el || im.element;
+    if (!el || !el.complete || !el.naturalWidth) continue;
+    try {
+      ctx.drawImage(el, im.x * scale, im.y * scale, (im.width || 100) * scale, (im.height || 100) * scale);
+    } catch (_) {}
+  }
+
+  // 3. Vector strokes on this sheet (spatial map first, filter fallback)
+  const sheetStrokes = (state._strokesBySheet && state._strokesBySheet.get && state._strokesBySheet.get(idx)) ||
+    (state.strokes || []).filter(s => s.sheet === idx && !s.deleted);
+  ctx.save();
+  ctx.scale(scale, scale);
+  for (const st of sheetStrokes) {
+    if (st.deleted) continue;
+    if (window.Ink && typeof window.Ink.drawStroke === 'function') {
+      window.Ink.drawStroke(ctx, st, 1.0);
+    } else if (st.points && st.points.length) {
+      ctx.save();
+      const rgb = st.rgb || [0, 0, 0];
+      ctx.strokeStyle = `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+      ctx.lineWidth = st.base_width || 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(st.points[0].x, st.points[0].y);
+      for (let i = 1; i < st.points.length; i++) {
+        ctx.lineTo(st.points[i].x, st.points[i].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+
+  // 4. Text notes on this sheet (wrap multi-line notes into the thumbnail)
+  const texts = (state.textObjects || []).filter(t => t.sheet === idx && !t.deleted);
+  for (const t of texts) {
+    const fontSize = Math.max(6, (t.fontSize || 16) * scale);
+    ctx.font = `${t.bold ? '700 ' : ''}${t.italic ? 'italic ' : ''}${fontSize}px Inter, sans-serif`;
+    ctx.fillStyle = t.color || '#141724';
+    ctx.textBaseline = 'top';
+    const maxW = Math.max(20, thumbW - (t.x || 0) * scale - 4);
+    const lines = String(t.text || '').split('\n').slice(0, 5);
+    let ty = (t.y || 0) * scale;
+    for (const line of lines) {
+      const words = line.split(/(\s+)/);
+      let current = '';
+      for (const word of words) {
+        const next = current + word;
+        if (ctx.measureText(next).width > maxW && current) {
+          ctx.fillText(current, (t.x || 0) * scale, ty);
+          ty += fontSize * 1.3;
+          current = word.trimStart();
+        } else {
+          current = next;
+        }
+      }
+      if (current) {
+        ctx.fillText(current, (t.x || 0) * scale, ty);
+        ty += fontSize * 1.3;
+      }
+      if (ty > thumbH) break;
+    }
+  }
+}
+
+function paintThumbJob(job) {
+  if (!job || !job.card || !job.card.isConnected) return;
+  drawThumbnailCanvas(job.canvas, job.idx, job.pi);
+  job.card.classList.add('thumb-rendered');
+}
+
+/**
+ * Paint visible thumbnails in small animation-frame budgets. Large notebooks
+ * with hundreds of pages no longer block the first drawer open with a long
+ * synchronous canvas rasterisation loop.
+ */
+function scheduleThumbPaint() {
+  if (_thumbFrame) return;
+  _thumbFrame = requestAnimationFrame(() => {
+    _thumbFrame = null;
+    let budget = 3;
+    for (const [key, job] of _thumbQueue) {
+      _thumbQueue.delete(key);
+      paintThumbJob(job);
+      if (--budget <= 0) break;
+    }
+    if (_thumbQueue.size) scheduleThumbPaint();
+  });
+}
+
+function queueThumbnail(card, canvas, idx, pi, immediate = false) {
+  const job = { card, canvas, idx, pi };
+  if (immediate) {
+    paintThumbJob(job);
+    return;
+  }
+  _thumbQueue.set(`${idx}:${pi && pi.width_pt}:${pi && pi.height_pt}`, job);
+  scheduleThumbPaint();
+}
+
+export function refreshThumbnailBadges() {
+  const grid = $('thumbnailGrid');
+  if (!grid) return;
+  grid.querySelectorAll('.thumb-card').forEach(card => {
+    const idx = parseInt(card.getAttribute('data-page'), 10);
+    if (Number.isNaN(idx)) return;
+    const badge = card.querySelector('.thumb-anno-count');
+    if (!badge) return;
+    const n = countAnnotationsOnPage(idx);
+    badge.textContent = n > 99 ? '99+' : String(n);
+    badge.classList.toggle('hidden', n === 0);
+  });
+  const railBadge = $('badgeThumbnails');
+  if (railBadge) railBadge.textContent = String((state.pageInfos || []).length || 1);
+}
+
 export function renderThumbnails() {
   const grid = $('thumbnailGrid');
   if (!grid || !state.pageInfos || !state.pageInfos.length) return;
 
+  if (_thumbObserver) {
+    _thumbObserver.disconnect();
+    _thumbObserver = null;
+  }
+  _thumbQueue.clear();
+
   grid.innerHTML = '';
+  const pageCount = state.pageInfos.length;
+  const railBadge = $('badgeThumbnails');
+  if (railBadge) railBadge.textContent = String(pageCount);
+
+  const observer = (typeof IntersectionObserver === 'function')
+    ? new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const card = entry.target;
+          const idx = parseInt(card.getAttribute('data-page'), 10);
+          const canvas = card.querySelector('canvas.thumb-canvas');
+          const pi = state.pageInfos[idx];
+          if (canvas && pi && !card.classList.contains('thumb-rendered')) {
+            queueThumbnail(card, canvas, idx, pi, false);
+          }
+          observer.unobserve(card);
+        }
+      }, { rootMargin: '260px 0px' })
+    : null;
+  _thumbObserver = observer;
+
   state.pageInfos.forEach((pi, idx) => {
     const card = document.createElement('div');
     card.className = 'thumb-card' + (idx === state.leftSheet ? ' active' : '');
@@ -330,6 +636,15 @@ export function renderThumbnails() {
       await handleDuplicatePage(idx);
     });
 
+    const btnRot = document.createElement('button');
+    btnRot.className = 'btn-thumb-act btn-thumb-rotate';
+    btnRot.title = 'Rotate Page 90°';
+    btnRot.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>';
+    btnRot.addEventListener('click', async e => {
+      e.stopPropagation();
+      await handleRotatePage(idx, true);
+    });
+
     const btnDel = document.createElement('button');
     btnDel.className = 'btn-thumb-act btn-thumb-del';
     btnDel.title = 'Delete Page';
@@ -345,77 +660,30 @@ export function renderThumbnails() {
     });
 
     actions.appendChild(btnDup);
+    actions.appendChild(btnRot);
     actions.appendChild(btnDel);
     card.appendChild(actions);
 
-    // Thumbnail Canvas Preview
+    // Thumbnail Canvas Preview (painted lazily when scrolled into view)
     const canvas = document.createElement('canvas');
     canvas.className = 'thumb-canvas';
     const thumbW = 120;
     const thumbH = Math.round(thumbW * ((pi.height_pt || 842) / (pi.width_pt || 595)));
     canvas.width = thumbW;
     canvas.height = thumbH;
+    card.appendChild(canvas);
 
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const scale = thumbW / (pi.width_pt || 595);
-      // 1. Background template
-      templates.drawPageBackground(ctx, 0, 0, thumbW, thumbH, pi.template || 'blank', 1.0);
-
-      // 2. Images on this sheet
-      const images = (state.images || []).filter(im => im.sheet === idx && !im.deleted);
-      for (const im of images) {
-        if (im.element && im.element.complete) {
-          ctx.save();
-          ctx.drawImage(im.element, im.x * scale, im.y * scale, (im.width || 100) * scale, (im.height || 100) * scale);
-          ctx.restore();
-        }
-      }
-
-      // 3. Vector strokes on this sheet
-      const sheetStrokes = (state.strokesBySheet && state.strokesBySheet[idx]) ||
-        (state.strokes || []).filter(s => s.sheet === idx && !s.deleted);
-      ctx.save();
-      ctx.scale(scale, scale);
-      for (const st of sheetStrokes) {
-        if (st.deleted) continue;
-        if (window.Ink && typeof window.Ink.drawStroke === 'function') {
-          window.Ink.drawStroke(ctx, st, 1.0);
-        } else if (st.points && st.points.length) {
-          ctx.save();
-          const rgb = st.rgb || [0, 0, 0];
-          ctx.strokeStyle = `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
-          ctx.lineWidth = st.base_width || 2;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.beginPath();
-          ctx.moveTo(st.points[0].x, st.points[0].y);
-          for (let i = 1; i < st.points.length; i++) {
-            ctx.lineTo(st.points[i].x, st.points[i].y);
-          }
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-      ctx.restore();
-
-      // 4. Text notes on this sheet
-      const texts = (state.textObjects || []).filter(t => t.sheet === idx && !t.deleted);
-      for (const t of texts) {
-        ctx.save();
-        const fontSize = Math.max(8, (t.fontSize || 16) * scale);
-        ctx.font = `${fontSize}px Inter, sans-serif`;
-        ctx.fillStyle = t.color || '#141724';
-        ctx.fillText(t.text || '', (t.x || 0) * scale, ((t.y || 0) + (t.fontSize || 16)) * scale);
-        ctx.restore();
-      }
-    }
+    // Annotation count badge
+    const annoBadge = document.createElement('span');
+    annoBadge.className = 'thumb-anno-count hidden';
+    const annoCount = countAnnotationsOnPage(idx);
+    annoBadge.textContent = annoCount > 99 ? '99+' : String(annoCount);
+    annoBadge.classList.toggle('hidden', annoCount === 0);
+    card.appendChild(annoBadge);
 
     const label = document.createElement('div');
     label.className = 'thumb-label';
     label.textContent = `Page ${idx + 1}`;
-
-    card.appendChild(canvas);
     card.appendChild(label);
 
     // Card click navigation
@@ -462,6 +730,17 @@ export function renderThumbnails() {
     });
 
     grid.appendChild(card);
+
+    if (observer) observer.observe(card);
+    queueThumbnail(card, canvas, idx, pi, idx < 3);
+  });
+
+  // Keep the active page visible when the drawer opens on a deep page.
+  requestAnimationFrame(() => {
+    const active = grid.querySelector('.thumb-card.active');
+    if (active && typeof active.scrollIntoView === 'function') {
+      active.scrollIntoView({ block: 'nearest' });
+    }
   });
 }
 
@@ -513,6 +792,20 @@ export function renderOutline() {
           _goToPageCallback(pageIdx, 'left');
           container.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
           header.closest('.outline-item').classList.add('active');
+        }
+      }
+    });
+  });
+
+  container.querySelectorAll('.outline-toggle').forEach(toggleBtn => {
+    toggleBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleBtn.classList.toggle('collapsed');
+      const item = toggleBtn.closest('.outline-item');
+      if (item) {
+        const children = item.querySelector(':scope > .outline-children');
+        if (children) {
+          children.classList.toggle('hidden');
         }
       }
     });
@@ -587,21 +880,29 @@ export async function buildSearchRects(q, results) {
       if (searchRects.length >= 500) break;
       const matchedChars = chars.slice(pos, pos + qLower.length);
       if (matchedChars.length > 0) {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const lineGroups = new Map();
         for (const ch of matchedChars) {
-          if (ch.rect) {
+          if (!ch.rect) continue;
+          const lIdx = ch.line_index !== undefined ? ch.line_index : 0;
+          if (!lineGroups.has(lIdx)) lineGroups.set(lIdx, []);
+          lineGroups.get(lIdx).push(ch);
+        }
+        for (const [lIdx, lineChs] of lineGroups.entries()) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const ch of lineChs) {
             minX = Math.min(minX, ch.rect[0]);
             minY = Math.min(minY, ch.rect[1]);
             maxX = Math.max(maxX, ch.rect[2]);
             maxY = Math.max(maxY, ch.rect[3]);
           }
-        }
-        if (minX !== Infinity) {
-          searchRects.push({
-            pageIndex,
-            rect: [minX, minY, maxX, maxY],
-            snippet: item.snippet,
-          });
+          if (minX !== Infinity) {
+            searchRects.push({
+              pageIndex,
+              lineIndex: lIdx,
+              rect: [minX, minY, maxX, maxY],
+              snippet: item.snippet,
+            });
+          }
         }
       }
       pos += qLower.length || 1;

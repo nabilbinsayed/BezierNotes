@@ -104,6 +104,7 @@ export const state = {
   dpr: 1,
   inkVisible: true,
   continuousScroll: true,
+  presentationMode: false,
 
   // Transient Gesture / Interaction State
   cur: null,             // current in-progress Stroke instance

@@ -14,6 +14,7 @@ Consolidated verification suite for all interaction, ergonomics, and accessibili
 - T12: WAL Undo/Redo IPC Synchronization (Image, Text & Batch Mutations)
 - T13: Document Text Layer Isolation & Page Shift Cache
 - T14: Console Hygiene (0 errors, 0 internal warnings)
+- T17-T22: Annotation review, signatures/stamps, presentation, lazy thumbnails, custom colors, shape routing, settings
 """
 import math, pathlib, sys, time
 from playwright.sync_api import sync_playwright
@@ -56,15 +57,16 @@ with sync_playwright() as pw:
       render_tile: async (args) => {
         const rect = (args && args.rect) || [0, 0, 256, 256];
         const px = (args && args.px) || 256;
-        const rw = rect[2] - rect[0];
-        const rh = rect[3] - rect[1];
-        const scale = px / Math.max(rw, rh);
+        const rw = Math.max(1.0, rect[2] - rect[0]);
+        const rh = Math.max(1.0, rect[3] - rect[1]);
+        const baseSpan = (rw <= 512.0 && rh <= 512.0) ? 512.0 : Math.max(rw, rh);
+        const scale = px / baseSpan;
         const tileW = Math.round(rw * scale) || 1;
         const tileH = Math.round(rh * scale) || 1;
         return new Array(tileW * tileH * 4).fill(128);
       },
       get_page_text_data: async (args) => ({
-        page_index: 0,
+        page_index: (args && args.pageIndex !== undefined) ? args.pageIndex : 0,
         text: 'Hello InkWell\\nSecond Line of PDF Text',
         lines: [
           {
@@ -395,6 +397,449 @@ with sync_playwright() as pw:
     check("switching tool away from textSelect clears selection and hides popover", tool_switch_cleared)
     pg.locator("#btnDockTextSelect").click()
     pg.wait_for_timeout(50)
+
+    # -------------------------------------------------------------
+    # T4.4: Plan 073 Precision Text Selection & Markup Annotations
+    # -------------------------------------------------------------
+    # 1. Clicking outside margin returns null without false-snapping
+    margin_hit = pg.evaluate("""
+    import('./js/workspace/text-selection.js').then(async ts => {
+      await ts.ensurePageTextData(0);
+      const hitRight = ts.findCharAndOffsetAtPageCoord(0, 350, 60);
+      const hitBelow = ts.findCharAndOffsetAtPageCoord(0, 100, 150);
+      return { hitRight, hitBelow };
+    })
+    """)
+    check("margin click outside text bounds returns null without false-snapping",
+          margin_hit["hitRight"] is None and margin_hit["hitBelow"] is None,
+          f"res={margin_hit}")
+
+    # 2. Cross-page selection ranges spanning sheet 0 and sheet 1
+    cross_page_sel = pg.evaluate("""
+    import('./js/workspace/text-selection.js').then(async ts => {
+      await ts.ensurePageTextData(0);
+      await ts.ensurePageTextData(1);
+      const sel = ts.computeTextSelectionRanges(0, 0, 5, 1);
+      return {
+        hasText: !!(sel && sel.text),
+        sheet0Rects: sel ? sel.rects.filter(r => r.sheet === 0).length : 0,
+        sheet1Rects: sel ? sel.rects.filter(r => r.sheet === 1).length : 0,
+        text: sel ? sel.text : ''
+      };
+    })
+    """)
+    check("computeTextSelectionRanges across pages returns rects on both sheets",
+          cross_page_sel["hasText"] and cross_page_sel["sheet0Rects"] > 0 and cross_page_sel["sheet1Rects"] > 0,
+          f"res={cross_page_sel}")
+
+    # 3. Text markup buttons visible, functional, and undoable
+    markup_res = pg.evaluate("""
+    import('./js/workspace/text-selection.js').then(async ts => {
+      await ts.ensurePageTextData(0);
+      const sel = ts.computeTextSelectionRanges(0, 0, 10, 0);
+      window.state.textSelection = sel;
+      window.state.selectedTextString = sel ? sel.text : '';
+
+      const btnHi = document.getElementById('btnTextHighlight');
+      const btnUnder = document.getElementById('btnTextUnderline');
+      const btnStrike = document.getElementById('btnTextStrikethrough');
+
+      const buttonsVisible = !btnHi.classList.contains('hidden') &&
+                             !btnUnder.classList.contains('hidden') &&
+                             !btnStrike.classList.contains('hidden');
+
+      const initialStrokes = (window.state.strokes || []).filter(s => !s.deleted).length;
+
+      // Apply highlight
+      window.applyTextSelectionMarkup('highlight');
+      const strokesAfterHi = (window.state.strokes || []).filter(s => !s.deleted);
+      const hiCount = strokesAfterHi.length - initialStrokes;
+      const lastStroke = strokesAfterHi[strokesAfterHi.length - 1];
+
+      // Undo
+      const doc = await import('./js/core/document.js');
+      doc.performUndo();
+      const strokesAfterUndo = (window.state.strokes || []).filter(s => !s.deleted).length;
+
+      return {
+        buttonsVisible,
+        hiCreated: hiCount > 0,
+        strokeKind: lastStroke ? lastStroke.kind : null,
+        undoSuccess: strokesAfterUndo === initialStrokes
+      };
+    })
+    """)
+    check("text markup buttons visible, generate vector strokes, and undo cleanly",
+          markup_res["buttonsVisible"] and markup_res["hiCreated"] and
+          markup_res["strokeKind"] == 'highlighter' and markup_res["undoSuccess"],
+          f"res={markup_res}")
+
+    # 4. Multi-line search match partitioning
+    search_partition_res = pg.evaluate("""
+    import('./js/ui/drawers.js').then(async drawers => {
+      const searchRects = await drawers.buildSearchRects('llSec', [{ page_index: 0, snippet: 'llSec' }]);
+      return {
+        count: searchRects.length,
+        lines: searchRects.map(r => r.lineIndex)
+      };
+    })
+    """)
+    check("buildSearchRects partitions multi-line hits into multiple per-line rects",
+          search_partition_res["count"] == 2 and search_partition_res["lines"] == [0, 1],
+          f"res={search_partition_res}")
+
+    # -------------------------------------------------------------
+    # T4.5: Plan 074 Undoable Page Transactions & Bookmark Durability
+    # -------------------------------------------------------------
+    print("\n=== T4.5 Plan 074 Undoable Page Transactions & Bookmark Durability ===", flush=True)
+    page_ops_undo_res = pg.evaluate("""
+    import('./js/core/document.js').then(async doc => {
+      const origPages = window.state.pageInfos.length;
+
+      // 1. Insert page & undo/redo
+      const insertedIdx = doc.insertPageAtIndex(1, { page_index: 1, width_pt: 500, height_pt: 700 });
+      const pagesAfterInsert = window.state.pageInfos.length;
+      doc.performUndo();
+      const pagesAfterUndoInsert = window.state.pageInfos.length;
+      doc.performRedo();
+      const pagesAfterRedoInsert = window.state.pageInfos.length;
+
+      // Clean up the inserted page so we're back to origPages
+      doc.performUndo();
+
+      // 2. Delete page & undo/redo
+      // Insert a dummy page first so we don't violate single page constraint
+      doc.insertPageAtIndex(1, { page_index: 1, width_pt: 500, height_pt: 700 }, { recordHistory: false });
+      const countBeforeDelete = window.state.pageInfos.length;
+      doc.deletePageAtIndex(1);
+      const countAfterDelete = window.state.pageInfos.length;
+      doc.performUndo();
+      const countAfterUndoDelete = window.state.pageInfos.length;
+      doc.performRedo();
+      const countAfterRedoDelete = window.state.pageInfos.length;
+
+      // 3. Reorder page & undo/redo
+      // We have countAfterRedoDelete pages. Let's insert another to have at least 2 pages.
+      if (window.state.pageInfos.length < 2) {
+        doc.insertPageAtIndex(1, { page_index: 1, width_pt: 500, height_pt: 700 }, { recordHistory: false });
+      }
+      window.state.pageInfos[0].tag = 'page0';
+      window.state.pageInfos[1].tag = 'page1';
+      doc.reorderPageAtIndex(0, 1);
+      const orderAfterReorder = [window.state.pageInfos[0].tag, window.state.pageInfos[1].tag];
+      doc.performUndo();
+      const orderAfterUndoReorder = [window.state.pageInfos[0].tag, window.state.pageInfos[1].tag];
+      doc.performRedo();
+      const orderAfterRedoReorder = [window.state.pageInfos[0].tag, window.state.pageInfos[1].tag];
+
+      // Clean up back to origPages
+      while (window.state.pageInfos.length > origPages) {
+        window.state.pageInfos.pop();
+      }
+
+      return {
+        pagesAfterInsert,
+        pagesAfterUndoInsert,
+        pagesAfterRedoInsert,
+        origPages,
+        countBeforeDelete,
+        countAfterDelete,
+        countAfterUndoDelete,
+        countAfterRedoDelete,
+        orderAfterReorder,
+        orderAfterUndoReorder,
+        orderAfterRedoReorder
+      };
+    })
+    """)
+    check("page operations insert, delete, and reorder support full undo/redo transactions",
+          page_ops_undo_res["pagesAfterInsert"] == page_ops_undo_res["origPages"] + 1 and
+          page_ops_undo_res["pagesAfterUndoInsert"] == page_ops_undo_res["origPages"] and
+          page_ops_undo_res["pagesAfterRedoInsert"] == page_ops_undo_res["origPages"] + 1 and
+          page_ops_undo_res["countAfterDelete"] == page_ops_undo_res["countBeforeDelete"] - 1 and
+          page_ops_undo_res["countAfterUndoDelete"] == page_ops_undo_res["countBeforeDelete"] and
+          page_ops_undo_res["countAfterRedoDelete"] == page_ops_undo_res["countBeforeDelete"] - 1 and
+          page_ops_undo_res["orderAfterReorder"] == ["page1", "page0"] and
+          page_ops_undo_res["orderAfterUndoReorder"] == ["page0", "page1"] and
+          page_ops_undo_res["orderAfterRedoReorder"] == ["page1", "page0"],
+          f"res={page_ops_undo_res}")
+
+    bookmark_serialize_res = pg.evaluate("""
+    import('./js/core/ipc.js').then(async ipc => {
+      window.state.bookmarks = [
+        { id: 'bm_test_1', page: 0, label: 'Intro Page', createdAt: 123456789 },
+        { id: 'bm_test_2', page: 1, label: 'Summary', createdAt: 987654321 }
+      ];
+
+      let capturedPayload = null;
+      const originalInvoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+      window.__TAURI__.core.invoke = async (cmd, args) => {
+        if (cmd === 'save_pdf' || cmd === 'save_pdf_dialog') {
+          capturedPayload = args;
+          return { success: true };
+        }
+        return originalInvoke ? originalInvoke(cmd, args) : null;
+      };
+
+      try {
+        await ipc.savePdf('dummy_test_path.pdf');
+      } finally {
+        window.__TAURI__.core.invoke = originalInvoke;
+      }
+
+      return {
+        captured: !!capturedPayload,
+        bookmarkCount: capturedPayload && capturedPayload.bookmarks ? capturedPayload.bookmarks.length : 0,
+        firstBm: capturedPayload && capturedPayload.bookmarks ? capturedPayload.bookmarks[0] : null
+      };
+    })
+    """)
+    check("savePdf serializes state.bookmarks correctly to backend IPC payload",
+          bookmark_serialize_res["captured"] and bookmark_serialize_res["bookmarkCount"] == 2 and
+          bookmark_serialize_res["firstBm"]["label"] == "Intro Page",
+          f"res={bookmark_serialize_res}")
+
+    # -------------------------------------------------------------
+    # T4.6: Plan 075 Tool Suite (Text Note Editing, Arrow & Triangle Shapes, Page Rotation)
+    # -------------------------------------------------------------
+    print("\n=== T4.6 Plan 075 Tool Suite (Text Notes, Shapes & Page Rotation) ===", flush=True)
+    tool_suite_res = pg.evaluate("""
+    Promise.all([
+      import('./js/tools/text.js'),
+      import('./js/tools/shapes.js'),
+      import('./js/core/document.js')
+    ]).then(async ([textTool, shapesTool, docOps]) => {
+      // 1. Text tool: clicking existing note does not duplicate
+      if (!window.state.textObjects) window.state.textObjects = [];
+      const testNote = {
+        id: 'txt_test_suite_1',
+        sheet: 0,
+        x: 100,
+        y: 100,
+        text: 'Hello InkWell',
+        fontSize: 16,
+        color: '#141724',
+        bold: false,
+        italic: false,
+        width: 140,
+        height: 32,
+        deleted: false
+      };
+      window.state.textObjects.push(testNote);
+      const noteCountBefore = window.state.textObjects.filter(t => !t.deleted).length;
+
+      const mockViewport = {
+        worldToPage: (x, y) => ({ sheet: 0, pageX: x, pageY: y }),
+        getPageLayout: (sheet) => ({ x: 0, y: 0, w: 612, h: 792, sheet }),
+        worldToScreen: (wx, wy, pane) => [wx, wy],
+        pageToScreen: (px, py, pane) => [px, py],
+        zoom: 1.0
+      };
+
+      // Click on the existing note
+      textTool.onTextToolClick({ clientX: 110, clientY: 110 }, [110, 110], 'left', mockViewport);
+      const noteCountAfter = window.state.textObjects.filter(t => !t.deleted).length;
+      const editorVisible = !document.getElementById('inlineTextEditor').classList.contains('hidden');
+      const editorText = document.getElementById('inlineTextarea') ? document.getElementById('inlineTextarea').value : '';
+      textTool.cancelEditing();
+
+      // 2. Shapes: arrow and triangle commit valid strokes
+      if (!window.state.strokes) window.state.strokes = [];
+      const strokesCountBefore = (window.state.strokes || []).filter(s => !s.deleted).length;
+
+      // Draw arrow
+      window.state.shapeKind = 'arrow';
+      window.state.shapeStart = [50, 50];
+      window.state.shapeEnd = [150, 150];
+      shapesTool.onShapeUp({}, mockViewport);
+
+      // Draw triangle
+      window.state.shapeKind = 'triangle';
+      window.state.shapeStart = [200, 200];
+      window.state.shapeEnd = [300, 300];
+      shapesTool.onShapeUp({}, mockViewport);
+
+      const strokesCountAfter = (window.state.strokes || []).filter(s => !s.deleted).length;
+
+      // 3. Page rotate: rotatePageAtIndex rotates dimensions and stroke points
+      const origW = window.state.pageInfos[0].width_pt;
+      const origH = window.state.pageInfos[0].height_pt;
+      const dummyStroke = {
+        id: 'stroke_rotate_test',
+        sheet: 0,
+        kind: 'pen',
+        rgb: [1, 0, 0],
+        cssColor: '#ff0000',
+        base_width: 2,
+        points: [{ x: 10, y: 20, p: 0.8, w: 2 }],
+        color: '#ff0000',
+        width: 2,
+        deleted: false
+      };
+      window.state.strokes.push(dummyStroke);
+
+      docOps.rotatePageAtIndex(0, true);
+      const rotW = window.state.pageInfos[0].width_pt;
+      const rotH = window.state.pageInfos[0].height_pt;
+      const rotPoint = { ...dummyStroke.points[0] };
+
+      docOps.performUndo();
+      const undoW = window.state.pageInfos[0].width_pt;
+      const undoH = window.state.pageInfos[0].height_pt;
+      const undoPoint = { ...dummyStroke.points[0] };
+
+      // Clean up test objects so subsequent tests run on clean slate
+      window.state.textObjects = (window.state.textObjects || []).filter(t => t.id !== 'txt_test_suite_1');
+      window.state.strokes = (window.state.strokes || []).filter(s => s.id !== 'stroke_rotate_test');
+
+      return {
+        noteCountBefore,
+        noteCountAfter,
+        editorVisible,
+        editorText,
+        shapesAdded: strokesCountAfter - strokesCountBefore,
+        origW,
+        origH,
+        rotW,
+        rotH,
+        rotPoint,
+        undoW,
+        undoH,
+        undoPoint
+      };
+    })
+    """)
+    check("text tool edits existing note without duplicating notes",
+          tool_suite_res["noteCountBefore"] == tool_suite_res["noteCountAfter"] and
+          tool_suite_res["editorVisible"] and tool_suite_res["editorText"] == "Hello InkWell",
+          f"res={tool_suite_res}")
+    check("shapes tool successfully commits arrow and triangle vector strokes",
+          tool_suite_res["shapesAdded"] == 2,
+          f"added={tool_suite_res['shapesAdded']}")
+    check("rotatePageAtIndex rotates page dimensions and stroke geometry with undo",
+          tool_suite_res["rotW"] == tool_suite_res["origH"] and
+          tool_suite_res["rotH"] == tool_suite_res["origW"] and
+          abs(tool_suite_res["rotPoint"]["x"] - (tool_suite_res["origH"] - 20)) < 1e-4 and
+          abs(tool_suite_res["rotPoint"]["y"] - 10) < 1e-4 and
+          tool_suite_res["undoW"] == tool_suite_res["origW"] and
+          tool_suite_res["undoH"] == tool_suite_res["origH"] and
+          abs(tool_suite_res["undoPoint"]["x"] - 10) < 1e-4 and
+          abs(tool_suite_res["undoPoint"]["y"] - 20) < 1e-4,
+          f"res={tool_suite_res}")
+
+    # -------------------------------------------------------------
+    # T4.7: Plan 076 UI Polish, Customizable Shortcuts & Dark Reading Mode
+    # -------------------------------------------------------------
+    print("\n=== T4.7 Plan 076 UI Polish, Shortcuts & Reading Mode ===", flush=True)
+
+    # 1. Ctrl+F opens search drawer
+    pg.keyboard.press("Control+f")
+    pg.wait_for_timeout(100)
+    search_drawer_open = pg.evaluate("!document.getElementById('drawerSearch').classList.contains('hidden')")
+    check("Ctrl+F shortcut opens Search drawer", search_drawer_open)
+    pg.evaluate("window.drawers.closeDrawer()")
+    pg.wait_for_timeout(50)
+
+    # 2. openGoToPageModal sets total display and max
+    goto_modal_res = pg.evaluate("""
+    (() => {
+      window.toolbar.openGoToPageModal();
+      const modalVisible = !document.getElementById('goToPageModal').classList.contains('hidden');
+      const totalDisplay = document.getElementById('goToPageTotalDisplay') ? document.getElementById('goToPageTotalDisplay').textContent : '';
+      const inputMax = document.getElementById('goToPageInput') ? document.getElementById('goToPageInput').max : '';
+      const pageCount = window.state.pageInfos ? window.state.pageInfos.length : 1;
+      window.toolbar.closeGoToPageModal();
+      return { modalVisible, totalDisplay, inputMax, expected: String(pageCount) };
+    })()
+    """)
+    check("openGoToPageModal sets #goToPageTotalDisplay and input.max to pageInfos.length",
+          goto_modal_res["modalVisible"] and
+          goto_modal_res["totalDisplay"] == goto_modal_res["expected"] and
+          goto_modal_res["inputMax"] == goto_modal_res["expected"],
+          f"res={goto_modal_res}")
+
+    # 3. Customizable shortcuts persistence and rebinding
+    rebind_res = pg.evaluate("""
+    (() => {
+      const origShortcut = window.commands.get('tool.pen')?.shortcut;
+      window.commands.setCommandShortcut('tool.pen', 'Ctrl+Shift+Alt+P');
+      const stored = localStorage.getItem('inkwell.keymap');
+      const storedObj = stored ? JSON.parse(stored) : {};
+      const newShortcutInReg = window.commands.get('tool.pen')?.shortcut;
+
+      // Revert back so we don't pollute other tests
+      window.commands.setCommandShortcut('tool.pen', origShortcut);
+      window.commands.resetKeybindings();
+
+      return {
+        hasStored: Object.prototype.hasOwnProperty.call(storedObj, 'tool.pen'),
+        storedVal: storedObj['tool.pen'],
+        newShortcutInReg
+      };
+    })()
+    """)
+    check("setCommandShortcut persists keymap override to localStorage and CommandRegistry",
+          rebind_res["hasStored"] and rebind_res["storedVal"] == "Ctrl+Shift+Alt+P" and
+          rebind_res["newShortcutInReg"] == "Ctrl+Shift+Alt+P",
+          f"res={rebind_res}")
+
+    # 4. Generalized spring-loaded tool key (holding m > 220ms reverts to toolBefore)
+    spring_key_res = pg.evaluate("""
+    (() => {
+      window.toolManager.setTool('pen');
+      const beforeTool = window.state.activeTool; // 'pen'
+
+      // Simulate holding 'm' for 300ms
+      window.toolManager.handleSpringKeyDown('m');
+      const activeDuringHold = window.state.activeTool; // 'highlighter'
+
+      return new Promise(resolve => {
+        setTimeout(() => {
+          window.toolManager.handleSpringKeyUp('m');
+          const activeAfterRelease = window.state.activeTool; // should revert to 'pen'
+          resolve({ beforeTool, activeDuringHold, activeAfterRelease });
+        }, 250);
+      });
+    })()
+    """)
+    check("holding spring key m > 220ms temporarily switches tool and reverts on release",
+          spring_key_res["beforeTool"] == "pen" and
+          spring_key_res["activeDuringHold"] == "highlighter" and
+          spring_key_res["activeAfterRelease"] == "pen",
+          f"res={spring_key_res}")
+
+    # 5. Reading mode cycling and canvas classes
+    reading_mode_res = pg.evaluate("""
+    (() => {
+      const tiles = document.getElementById('tiles');
+      window.setReadingMode('normal');
+      const normDark = tiles.classList.contains('reading-mode-dark');
+      const normSepia = tiles.classList.contains('reading-mode-sepia');
+
+      window.commands.execute('view.cycleReadingMode'); // normal -> dark
+      const darkDark = tiles.classList.contains('reading-mode-dark');
+      const darkSepia = tiles.classList.contains('reading-mode-sepia');
+
+      window.commands.execute('view.cycleReadingMode'); // dark -> sepia
+      const sepiaDark = tiles.classList.contains('reading-mode-dark');
+      const sepiaSepia = tiles.classList.contains('reading-mode-sepia');
+
+      window.commands.execute('view.cycleReadingMode'); // sepia -> normal
+      const backDark = tiles.classList.contains('reading-mode-dark');
+      const backSepia = tiles.classList.contains('reading-mode-sepia');
+
+      return {
+        normOk: !normDark && !normSepia,
+        darkOk: darkDark && !darkSepia,
+        sepiaOk: !sepiaDark && sepiaSepia,
+        backOk: !backDark && !backSepia
+      };
+    })()
+    """)
+    check("view.cycleReadingMode cycles #tiles between normal, reading-mode-dark, and reading-mode-sepia",
+          reading_mode_res["normOk"] and reading_mode_res["darkOk"] and
+          reading_mode_res["sepiaOk"] and reading_mode_res["backOk"],
+          f"res={reading_mode_res}")
 
     # -------------------------------------------------------------
     # T5: Canvas Context Menu & Tool Triggering
@@ -802,6 +1247,45 @@ with sync_playwright() as pw:
           turnaround_check['maxDev'] < 5.0 and turnaround_check['opsCount'] > 0,
           f"maxDev={turnaround_check['maxDev']:.2f} opsCount={turnaround_check['opsCount']}")
 
+    # Plan 070: #dry blend mode and zero commit-snap verification
+    dry_blend_mode = pg.evaluate("window.getComputedStyle(document.getElementById('dry')).mixBlendMode")
+    check("#dry computed style mixBlendMode is normal", dry_blend_mode == "normal", f"mode={dry_blend_mode}")
+
+    stroke_snap_check = pg.evaluate("""() => {
+        const vp = window.getViewport ? window.getViewport() : null;
+        if (!vp || !window.penTool) return { ok: false, reason: 'missing vp or penTool' };
+        const t0 = performance.now();
+        window.penTool.onPenDown({ pressure: 0.5, timeStamp: t0 }, [50, 80], 'left', vp);
+        for (let i = 1; i < 200; i++) {
+            const x = 50 + i * 1.5;
+            const y = 80 + Math.sin(i * 0.1) * 15;
+            window.penTool.onPenMove(
+                { pressure: 0.5, buttons: 1, timeStamp: t0 + i * 4 },
+                [x, y],
+                'left',
+                vp,
+                { render: false }
+            );
+        }
+        const livePts = window.state.cur ? window.state.cur.points.map(p => ({ x: p.x, y: p.y })) : [];
+        window.penTool.onPenUp({}, vp);
+        const elapsed = performance.now() - t0;
+        const committedStroke = window.state.strokes[window.state.strokes.length - 1];
+        const committedPts = committedStroke ? committedStroke.points.map(p => ({ x: p.x, y: p.y })) : [];
+        let maxDiff = 0;
+        if (livePts.length === committedPts.length) {
+            for (let i = 0; i < livePts.length; i++) {
+                maxDiff = Math.max(maxDiff, Math.hypot(livePts[i].x - committedPts[i].x, livePts[i].y - committedPts[i].y));
+            }
+        } else {
+            maxDiff = 999;
+        }
+        return { ok: true, maxDiff, elapsed, count: committedPts.length };
+    }""")
+    check("200-point stroke produces zero commit-snap and fast completion",
+          stroke_snap_check.get('ok') and stroke_snap_check.get('maxDiff', 999) < 1e-4 and stroke_snap_check.get('elapsed', 999) < 150,
+          f"maxDiff={stroke_snap_check.get('maxDiff')} elapsed={stroke_snap_check.get('elapsed'):.1f}ms count={stroke_snap_check.get('count')}")
+
     # -------------------------------------------------------------
     # T11: Zoom Controls & Percentage Readout
     # -------------------------------------------------------------
@@ -1190,6 +1674,551 @@ with sync_playwright() as pw:
           doc_reset_res["textSelNull"] and doc_reset_res["selStringEmpty"] and doc_reset_res["selSpansEmpty"] and doc_reset_res["isSelectingFalse"])
     check("setDocument clears searchResults and search query",
           doc_reset_res["searchResultsEmpty"] and doc_reset_res["searchQueryEmpty"] and doc_reset_res["isSearchingFalse"] and doc_reset_res["activeSearchZero"])
+
+    # -------------------------------------------------------------
+    # T15: Dual-Pane Split View Architecture & Synchronization
+    # -------------------------------------------------------------
+    print("\n=== T15 Dual-Pane Split View Architecture ===", flush=True)
+
+    # 1. Toggling view.toggleSplit makes #splitDivider and #splitPageNavCluster visible and activates both buttons
+    split_initial = pg.evaluate("""(() => {
+        window.commands.execute('view.toggleSplit');
+        const divider = document.getElementById('splitDivider');
+        const cluster = document.getElementById('splitPageNavCluster');
+        const btnRail = document.getElementById('btnRailSplit');
+        const btnZoom = document.getElementById('btnZoomSplit');
+        return {
+            splitMode: window.getViewport().splitMode,
+            dividerVisible: divider && !divider.classList.contains('hidden'),
+            clusterVisible: cluster && !cluster.classList.contains('hidden'),
+            railActive: btnRail && btnRail.classList.contains('active'),
+            zoomActive: btnZoom && btnZoom.classList.contains('active'),
+        };
+    })()""")
+    check("toggling view.toggleSplit activates split mode, displays divider and buttons",
+          split_initial["splitMode"] and split_initial["dividerVisible"] and split_initial["clusterVisible"] and
+          split_initial["railActive"] and split_initial["zoomActive"],
+          f"res={split_initial}")
+
+    # 2. Opening a drawer while in split mode preserves .active on #btnRailSplit
+    drawer_split_ok = pg.evaluate("""(() => {
+        window.drawers.openDrawer('thumbnails');
+        const btnRail = document.getElementById('btnRailSplit');
+        const stillActive = btnRail && btnRail.classList.contains('active');
+        window.drawers.closeDrawer();
+        return stillActive;
+    })()""")
+    check("opening a drawer in split mode preserves .active on #btnRailSplit", drawer_split_ok)
+
+    # 3. Dragging #splitDivider updates _viewport.splitRatio and compositor.paneBounds('left').width
+    divider_drag_ok = pg.evaluate("""(() => {
+        const divider = document.getElementById('splitDivider');
+        const stage = document.getElementById('stage');
+        const rect = stage.getBoundingClientRect();
+        // Simulate dragging to 60%
+        const targetX = rect.left + rect.width * 0.6;
+        divider.dispatchEvent(new PointerEvent('pointerdown', { clientX: rect.left + rect.width * 0.5, bubbles: true }));
+        divider.dispatchEvent(new PointerEvent('pointermove', { clientX: targetX, bubbles: true }));
+        divider.dispatchEvent(new PointerEvent('pointerup', { clientX: targetX, bubbles: true }));
+
+        const ratioAfterDrag = window.getViewport().splitRatio;
+        const leftWidthAfterDrag = window.compositor.paneBounds('left').width;
+        const expectedW = Math.round(rect.width * 0.6);
+
+        // Test double-click reset to 0.5
+        divider.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const ratioAfterDblClick = window.getViewport().splitRatio;
+
+        return {
+            dragRatioNear60: Math.abs(ratioAfterDrag - 0.6) < 0.05,
+            widthMatchesDrag: Math.abs(leftWidthAfterDrag - expectedW) < 5,
+            resetToHalf: ratioAfterDblClick === 0.5
+        };
+    })()""")
+    check("dragging #splitDivider updates splitRatio and left pane bounds, dblclick resets to 0.5",
+          divider_drag_ok["dragRatioNear60"] and divider_drag_ok["widthMatchesDrag"] and divider_drag_ok["resetToHalf"],
+          f"res={divider_drag_ok}")
+
+    # 4. Navigating the right pane updates #rightPanePageNum via activePagesChanged
+    nav_right_ok = pg.evaluate("""(() => {
+        window.emit('activePagesChanged', { left: 0, right: 3 });
+        const leftEl = document.getElementById('leftPanePageNum');
+        const rightEl = document.getElementById('rightPanePageNum');
+        const leftTxt = leftEl ? leftEl.textContent : '';
+        const rightTxt = rightEl ? rightEl.textContent : '';
+
+        // Reset split mode back to off
+        window.commands.execute('view.toggleSplit');
+        const splitOff = !window.getViewport().splitMode;
+        const dividerHidden = document.getElementById('splitDivider').classList.contains('hidden');
+
+        return {
+            leftText: leftTxt === '1',
+            rightText: rightTxt === '4',
+            splitOff,
+            dividerHidden
+        };
+    })()""")
+    check("navigating right pane updates #rightPanePageNum via activePagesChanged, toggle restores single pane",
+          nav_right_ok["leftText"] and nav_right_ok["rightText"] and nav_right_ok["splitOff"] and nav_right_ok["dividerHidden"],
+          f"res={nav_right_ok}")
+
+    # 5. Trackpad gesturestart / gesturechange updates zoom without throwing relY ReferenceError
+    gesture_res = pg.evaluate("""(() => {
+        const vp = window.getViewport();
+        const initialZoom = vp.zoom;
+        const gStart = new Event('gesturestart', { bubbles: true, cancelable: true });
+        gStart.clientX = 300;
+        gStart.clientY = 300;
+        window.dispatchEvent(gStart);
+
+        const gChange = new Event('gesturechange', { bubbles: true, cancelable: true });
+        gChange.clientX = 300;
+        gChange.clientY = 300;
+        gChange.scale = 1.5;
+        window.dispatchEvent(gChange);
+
+        const zoomed = vp.zoom;
+
+        const gEnd = new Event('gestureend', { bubbles: true, cancelable: true });
+        window.dispatchEvent(gEnd);
+
+        // Reset zoom back to initial
+        vp.setZoom(initialZoom, [300, 300], 'left');
+
+        return {
+            initialZoom,
+            zoomed,
+            zoomIncreased: zoomed > initialZoom * 1.4,
+            hasCancelFunc: typeof window.cancelPendingTouchStroke === 'function'
+        };
+    })()""")
+    check("trackpad gesturestart/change zooms cleanly without relY ReferenceError",
+          gesture_res["zoomIncreased"] and gesture_res["hasCancelFunc"],
+          f"res={gesture_res}")
+
+    # 6. Two-finger touch pinch zooms viewport and commits zero strokes to document
+    touch_pinch_res = pg.evaluate("""(() => {
+        const vp = window.getViewport();
+        const stage = document.getElementById('stage');
+        const wetCanvas = document.getElementById('wet');
+        const initialStrokes = (window.state.strokes || []).length;
+        const initialZoom = vp.zoom;
+
+        // Finger 1 down on wetCanvas
+        wetCanvas.dispatchEvent(new PointerEvent('pointerdown', {
+            pointerId: 101, pointerType: 'touch', clientX: 200, clientY: 200, bubbles: true
+        }));
+
+        // Finger 2 down on wetCanvas (triggers pinch arbitration)
+        wetCanvas.dispatchEvent(new PointerEvent('pointerdown', {
+            pointerId: 102, pointerType: 'touch', clientX: 300, clientY: 200, bubbles: true
+        }));
+
+        const isPinchingDuring = vp.isPinching;
+
+        // Move fingers apart
+        window.dispatchEvent(new PointerEvent('pointermove', {
+            pointerId: 101, pointerType: 'touch', clientX: 150, clientY: 200, bubbles: true
+        }));
+        window.dispatchEvent(new PointerEvent('pointermove', {
+            pointerId: 102, pointerType: 'touch', clientX: 350, clientY: 200, bubbles: true
+        }));
+
+        const zoomAfterPinch = vp.zoom;
+
+        // Release fingers
+        window.dispatchEvent(new PointerEvent('pointerup', {
+            pointerId: 101, pointerType: 'touch', clientX: 150, clientY: 200, bubbles: true
+        }));
+        window.dispatchEvent(new PointerEvent('pointerup', {
+            pointerId: 102, pointerType: 'touch', clientX: 350, clientY: 200, bubbles: true
+        }));
+
+        const strokesAfter = (window.state.strokes || []).length;
+        const finalPinching = vp.isPinching;
+
+        // Reset zoom
+        vp.setZoom(initialZoom, [200, 200], 'left');
+
+        return {
+            isPinchingDuring,
+            zoomIncreased: zoomAfterPinch > initialZoom * 1.5,
+            zeroStrokesCommitted: strokesAfter === initialStrokes,
+            pinchCleanedUp: !finalPinching
+        };
+    })()""")
+    check("two-finger touch pinch scales viewport and commits zero unwanted strokes",
+          touch_pinch_res["isPinchingDuring"] and touch_pinch_res["zoomIncreased"] and
+          touch_pinch_res["zeroStrokesCommitted"] and touch_pinch_res["pinchCleanedUp"],
+          f"res={touch_pinch_res}")
+
+    # -------------------------------------------------------------
+    # T16: Regression & Edge Case Hardening (Waves 069-076)
+    # -------------------------------------------------------------
+    print("\n=== T16 Regression & Edge Case Hardening (Waves 069-076) ===", flush=True)
+
+    # 1. Chisel stroke tool path delegation
+    chisel_path_res = pg.evaluate("""(() => {
+        const s = {
+            id: 'test_chisel_1',
+            tool: 'chisel',
+            kind: 'chisel',
+            base_width: 12,
+            points: [{ x: 30, y: 30, p: 0.5 }, { x: 70, y: 70, p: 0.8 }, { x: 110, y: 80, p: 0.6 }]
+        };
+        const p2d = window.Ink && typeof window.Ink.getPath2D === 'function' ? window.Ink.getPath2D(s) : null;
+        return {
+            hasGetPath2D: !!(window.Ink && typeof window.Ink.getPath2D === 'function'),
+            isPath2D: p2d instanceof Path2D
+        };
+    })()""")
+    check("chisel stroke tool delegates correctly to getChiselPath2D returning Path2D instance",
+          chisel_path_res["hasGetPath2D"] and chisel_path_res["isPath2D"],
+          f"res={chisel_path_res}")
+
+    # 2. Escape key dismisses confirmDeletePageModal
+    modal_esc_res = pg.evaluate("""(async () => {
+        const modal = document.getElementById('confirmDeletePageModal');
+        const drawers = await import('./js/ui/drawers.js');
+        if (!modal || typeof drawers.confirmDeletePageDialog !== 'function') {
+            return { modalFound: false, hasFunc: !!(drawers && drawers.confirmDeletePageDialog) };
+        }
+        const dialogPromise = drawers.confirmDeletePageDialog(1);
+        const isOpen = !modal.classList.contains('hidden');
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        const resolvedResult = await dialogPromise;
+        const isClosed = modal.classList.contains('hidden');
+
+        return {
+            modalFound: true,
+            hasFunc: true,
+            isOpen,
+            resolvedResult,
+            isClosed
+        };
+    })()""")
+    check("Escape key dismisses confirmDeletePageModal and resolves dialog to false",
+          modal_esc_res.get("modalFound") and modal_esc_res.get("isOpen") and
+          modal_esc_res.get("resolvedResult") is False and modal_esc_res.get("isClosed"),
+          f"res={modal_esc_res}")
+
+    # 3. Page layout coordinate aliases and dimensions
+    pl_coords_res = pg.evaluate("""(() => {
+        const vp = window.getViewport();
+        const pl = vp.pageLayouts && vp.pageLayouts[0];
+        if (!pl) return { hasLayout: false };
+        return {
+            hasLayout: true,
+            hasWidth: typeof pl.width === 'number' && !isNaN(pl.width) && pl.width > 0,
+            hasHeight: typeof pl.height === 'number' && !isNaN(pl.height) && pl.height > 0,
+            hasW: typeof pl.w === 'number' && !isNaN(pl.w) && pl.w > 0,
+            hasH: typeof pl.h === 'number' && !isNaN(pl.h) && pl.h > 0,
+            wEqualsWidth: pl.w === pl.width,
+            hEqualsHeight: pl.h === pl.height
+        };
+    })()""")
+    check("viewport pageLayouts provides consistent width/w and height/h dimensions for coordinate arithmetic",
+          pl_coords_res.get("hasLayout") and pl_coords_res.get("hasWidth") and
+          pl_coords_res.get("hasW") and pl_coords_res.get("wEqualsWidth") and
+          pl_coords_res.get("hEqualsHeight"),
+          f"res={pl_coords_res}")
+
+    # -------------------------------------------------------------
+    # T17: Annotation Review & Markdown Summary
+    # -------------------------------------------------------------
+    print("\n=== T17 Annotation Review & Markdown Summary ===", flush=True)
+
+    # Earlier isolation tests reduce the document to a single page; restore a
+    # second page so cross-page review and presentation paging are testable.
+    pg.evaluate("""(async () => {
+        const doc = await import('./js/core/document.js');
+        if ((window.state.pageInfos || []).length < 2) {
+            doc.insertPageAtIndex(1, { page_index: 1, width_pt: 595, height_pt: 842 }, { recordHistory: false });
+            if (window.getViewport()) window.getViewport().updateDocumentLayout(window.state.pageInfos);
+        }
+    })()""")
+    pg.wait_for_timeout(150)
+
+    # Seed one deterministic text note and one extra ink stroke.
+    pg.evaluate("""(async () => {
+        const doc = await import('./js/core/document.js');
+        doc.addObjectsBatch({
+            strokes: [{
+                id: 'ink_t17_1', sheet: 0, kind: 'pen', rgb: [0.18, 0.25, 0.55], base_width: 2.2,
+                points: [{x: 120, y: 520, p: 0.7}, {x: 210, y: 545, p: 0.7}, {x: 300, y: 530, p: 0.7}],
+                deleted: false
+            }],
+            textObjects: [
+                {id: 'note_t17_1', sheet: 0, x: 120, y: 600, text: 'T17 unique review note about eigenvalues', fontSize: 16, color: '#141724', bold: false, italic: false, width: 260, height: 30},
+                {id: 'note_t17_2', sheet: 1, x: 140, y: 260, text: 'Second page reminder for T17', fontSize: 16, color: '#1d4ed8', bold: false, italic: false, width: 240, height: 30}
+            ]
+        });
+    })()""")
+    pg.wait_for_timeout(250)
+
+    total_annotations = pg.evaluate("window.annotationsPanel.annotationCount()")
+    pg.evaluate("window.drawers.openDrawer('annotations')")
+    pg.wait_for_timeout(300)
+    drawer_cards = pg.locator("#annotationList .annotation-card").count()
+    badge_text = pg.inner_text("#badgeAnnotations")
+    check("annotation review lists every annotation and keeps the rail badge in sync",
+          drawer_cards == total_annotations and badge_text == str(total_annotations),
+          f"cards={drawer_cards} total={total_annotations} badge={badge_text}")
+
+    pg.locator('#annotationFilterChips .annotation-filter-chip[data-filter="note"]').click()
+    pg.wait_for_timeout(150)
+    note_categories = pg.eval_on_selector_all("#annotationList .annotation-card", "els => [...new Set(els.map(e => e.dataset.category))]")
+    note_cards = pg.locator("#annotationList .annotation-card").count()
+    check("annotation type filter isolates text notes", note_categories == ["note"] and note_cards >= 2, f"cats={note_categories} n={note_cards}")
+
+    pg.locator('#annotationFilterChips .annotation-filter-chip[data-filter="all"]').click()
+    pg.fill("#annotationSearchInput", "eigenvalues")
+    pg.wait_for_timeout(220)
+    search_cards = pg.locator("#annotationList .annotation-card").count()
+    search_text = pg.inner_text("#annotationList")
+    check("annotation search matches note content", search_cards == 1 and "eigenvalues" in search_text, f"n={search_cards}")
+    pg.fill("#annotationSearchInput", "")
+    pg.wait_for_timeout(180)
+
+    # Jump-to selects the underlying object and navigates to its page.
+    pg.locator('.annotation-card[data-annotation-id="note_t17_2"]').click()
+    pg.wait_for_timeout(250)
+    focus_res = pg.evaluate("({ sel: window.state.selectedTextObjects.map(t => t.id), page: window.state.leftSheet, tool: window.state.activeTool })")
+    check("clicking a review item jumps to the page and selects the object",
+          focus_res["sel"] == ["note_t17_2"] and focus_res["page"] == 1 and focus_res["tool"] == "lasso",
+          f"res={focus_res}")
+
+    # Edit button opens the inline text editor for a review note.
+    pg.eval_on_selector('.annotation-card[data-annotation-id="note_t17_1"] .annotation-edit', "el => el.click()")
+    pg.wait_for_timeout(250)
+    edit_res = pg.evaluate("""(() => ({
+        visible: !document.getElementById('inlineTextEditor').classList.contains('hidden'),
+        value: document.getElementById('inlineTextarea').value
+    }))()""")
+    pg.evaluate("import('./js/tools/text.js').then(t => t.cancelEditing())")
+    pg.wait_for_timeout(100)
+    check("review notes expose an inline editor with the original text",
+          edit_res["visible"] and "eigenvalues" in edit_res["value"], f"res={edit_res}")
+
+    # Markdown summary copy path.
+    pg.locator("#btnAnnotationSummary").click()
+    pg.wait_for_timeout(250)
+    summary = pg.evaluate("navigator.clipboard.readText()")
+    check("copy summary exports a page-grouped Markdown digest",
+          summary.startswith("# Annotations") and "## Page 1" in summary and "eigenvalues" in summary,
+          f"len={len(summary)}")
+
+    # Delete from the review list, then undo restores it.
+    count_before_delete = pg.evaluate("window.annotationsPanel.annotationCount()")
+    pg.eval_on_selector('.annotation-card[data-annotation-id="note_t17_2"] .annotation-delete', "el => el.click()")
+    pg.wait_for_timeout(250)
+    count_after_delete = pg.evaluate("window.annotationsPanel.annotationCount()")
+    pg.evaluate("window.commands.execute('edit.undo')")
+    pg.wait_for_timeout(250)
+    count_after_undo = pg.evaluate("window.annotationsPanel.annotationCount()")
+    check("deleting a review item is undoable",
+          count_after_delete == count_before_delete - 1 and count_after_undo == count_before_delete,
+          f"before={count_before_delete} after={count_after_delete} undo={count_after_undo}")
+    pg.evaluate("window.drawers.closeDrawer()")
+    pg.wait_for_timeout(150)
+
+    # -------------------------------------------------------------
+    # T18: Signature & Stamp Studio
+    # -------------------------------------------------------------
+    print("\n=== T18 Signature & Stamp Studio ===", flush=True)
+    pg.locator("#btnDockSignature").click()
+    pg.wait_for_timeout(250)
+    pad_box = pg.locator("#signaturePad").bounding_box()
+    pg.mouse.move(pad_box["x"] + 70, pad_box["y"] + 140)
+    pg.mouse.down()
+    for i in range(26):
+        pg.mouse.move(pad_box["x"] + 70 + i * 13, pad_box["y"] + 140 - 30 * math.sin(i / 3.2))
+    pg.mouse.up()
+    pg.wait_for_timeout(150)
+    placeholder_hidden = pg.evaluate("document.getElementById('sigPadPlaceholder').classList.contains('hidden')")
+    pg.locator("#btnSigInsert").click()
+    pg.wait_for_timeout(650)
+    sig_res = pg.evaluate("""(() => {
+        const imgs = window.state.images || [];
+        const sig = imgs[imgs.length - 1] || null;
+        return {
+            found: !!sig && String(sig.id).startsWith('signature_'),
+            kind: sig ? sig.kind : null,
+            selected: (window.state.selectedImages || []).length === 1,
+            modalClosed: document.getElementById('signatureModal').classList.contains('hidden'),
+            saved: window.signatureStudio.getSavedSignatureCount()
+        };
+    })()""")
+    check("drawn signature inserts as a real PDF image, selects it, and is saved locally",
+          placeholder_hidden and sig_res["found"] and sig_res["kind"] == "signature" and
+          sig_res["selected"] and sig_res["modalClosed"] and sig_res["saved"] >= 1,
+          f"res={sig_res}")
+
+    pg.locator("#btnDockSignature").click()
+    pg.wait_for_timeout(200)
+    pg.locator('.sig-tab[data-sig-tab="stamp"]').click()
+    pg.wait_for_timeout(200)
+    stamp_cards = pg.locator(".sig-stamp-card").count()
+    pg.locator(".sig-stamp-card").first.click()
+    pg.locator("#btnSigInsert").click()
+    pg.wait_for_timeout(500)
+    stamp_res = pg.evaluate("""(() => {
+        const imgs = window.state.images || [];
+        const stamp = imgs[imgs.length - 1] || null;
+        const anno = window.annotationsPanel.collectAnnotations().filter(a => a.category === 'image');
+        return {
+            found: !!stamp && String(stamp.id).startsWith('stamp_'),
+            label: stamp ? stamp.label : null,
+            kind: stamp ? stamp.kind : null,
+            imageAnnotations: anno.length
+        };
+    })()""")
+    check("stamp presets insert as labelled PDF images and appear in the review list",
+          stamp_cards == 8 and stamp_res["found"] and stamp_res["kind"] == "stamp" and
+          stamp_res["label"] == "APPROVED" and stamp_res["imageAnnotations"] >= 2,
+          f"cards={stamp_cards} res={stamp_res}")
+
+    # -------------------------------------------------------------
+    # T19: Presentation Mode
+    # -------------------------------------------------------------
+    print("\n=== T19 Presentation Mode ===", flush=True)
+    pg.evaluate("window.navigation.goToPage(0, 'left', window.getViewport(), false)")
+    pg.wait_for_timeout(120)
+    pg.keyboard.press("F5")
+    pg.wait_for_timeout(650)
+    present_on = pg.evaluate("""(() => ({
+        flag: window.state.presentationMode,
+        bodyClass: document.body.classList.contains('presentation-mode'),
+        hud: !document.getElementById('presentationHud').classList.contains('hidden'),
+        headerHidden: document.getElementById('topHeader').offsetParent === null,
+        railHidden: document.getElementById('navRail').offsetParent === null,
+        label: document.getElementById('presentPageLabel').textContent
+    }))()""")
+    check("presentation mode hides chrome, fits the page and shows the stage HUD",
+          present_on["flag"] and present_on["bodyClass"] and present_on["hud"] and
+          present_on["headerHidden"] and present_on["railHidden"], f"res={present_on}")
+
+    pg.keyboard.press("ArrowRight")
+    pg.wait_for_timeout(500)
+    after_next = pg.evaluate("({ page: window.state.leftSheet, label: document.getElementById('presentPageLabel').textContent })")
+    check("presentation arrow keys page the document and keep the HUD honest",
+          after_next["page"] == 1 and after_next["label"].startswith("2 /"), f"res={after_next}")
+
+    pg.keyboard.press("b")
+    pg.wait_for_timeout(200)
+    blank_on = pg.evaluate("document.body.classList.contains('presentation-blank') && !document.getElementById('presentationBlank').classList.contains('hidden')")
+    pg.keyboard.press("b")
+    pg.wait_for_timeout(150)
+    blank_off = pg.evaluate("!document.body.classList.contains('presentation-blank')")
+    check("presentation blank-screen cut toggles both ways", blank_on and blank_off, f"on={blank_on} off={blank_off}")
+
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(450)
+    present_off = pg.evaluate("""(() => ({
+        flag: window.state.presentationMode,
+        bodyClass: document.body.classList.contains('presentation-mode'),
+        hudHidden: document.getElementById('presentationHud').classList.contains('hidden'),
+        tool: window.state.activeTool
+    }))()""")
+    check("Escape exits presentation and restores the working stage",
+          not present_off["flag"] and not present_off["bodyClass"] and present_off["hudHidden"] and
+          present_off["tool"] in ("pen", "lasso", "highlighter", "eraser", "text", "laser", "rect", "ellipse", "line"),
+          f"res={present_off}")
+
+    # -------------------------------------------------------------
+    # T20: Lazy Thumbnails & Annotation Badges
+    # -------------------------------------------------------------
+    print("\n=== T20 Lazy Thumbnails & Annotation Badges ===", flush=True)
+    pg.evaluate("window.drawers.openDrawer('thumbnails')")
+    pg.wait_for_timeout(700)
+    thumb_res = pg.evaluate("""(() => {
+        const pages = (window.state.pageInfos || []).length;
+        const cards = document.querySelectorAll('#thumbnailGrid .thumb-card').length;
+        const canvases = document.querySelectorAll('#thumbnailGrid .thumb-card canvas.thumb-canvas').length;
+        const rendered = document.querySelectorAll('#thumbnailGrid .thumb-card.thumb-rendered').length;
+        const railBadge = document.getElementById('badgeThumbnails').textContent;
+        const annoBadges = document.querySelectorAll('#thumbnailGrid .thumb-anno-count').length;
+        return { pages, cards, canvases, rendered, railBadge, annoBadges };
+    })()""")
+    check("thumbnail rail renders all cards with deferred canvas painting",
+          thumb_res["cards"] == thumb_res["pages"] and thumb_res["canvases"] == thumb_res["pages"] and
+          thumb_res["rendered"] >= 1 and thumb_res["annoBadges"] == thumb_res["pages"],
+          f"res={thumb_res}")
+    check("thumbnail rail badge reports the true page count", thumb_res["railBadge"] == str(thumb_res["pages"]), f"res={thumb_res}")
+    pg.evaluate("window.drawers.closeDrawer()")
+    pg.wait_for_timeout(150)
+
+    # -------------------------------------------------------------
+    # T21: Custom Color Slots & Property Popover Gating
+    # -------------------------------------------------------------
+    print("\n=== T21 Custom Colors & Property Popover ===", flush=True)
+    pg.evaluate("localStorage.removeItem('inkwell.customColors.v1')")
+    pg.locator("#btnDockAddPreset").click()
+    pg.wait_for_timeout(200)
+    pg.locator('.swatch[data-color="#dc2626"]').click()
+    pg.locator('.swatch-custom[data-slot="0"]').click()
+    pg.wait_for_timeout(150)
+    saved_slots = pg.evaluate("JSON.parse(localStorage.getItem('inkwell.customColors.v1') || '[]')")
+    pg.locator('.swatch[data-color="#16a34a"]').click()
+    pg.locator('.swatch-custom.filled[data-slot="0"]').click()
+    pg.wait_for_timeout(150)
+    applied = pg.evaluate("window.state.color")
+    pg.locator('.swatch-custom[data-slot="0"]').click(button="right")
+    pg.wait_for_timeout(150)
+    cleared_slots = pg.evaluate("JSON.parse(localStorage.getItem('inkwell.customColors.v1') || '[]')")
+    check("custom colour slots save, re-apply and clear duplicate colours",
+          saved_slots[0] == "#dc2626" and abs(applied[0] - 0.8627) < 0.01 and cleared_slots[0] is None,
+          f"saved={saved_slots} applied={applied} cleared={cleared_slots}")
+    pg.locator("#btnClosePropPopover").click()
+    pg.wait_for_timeout(100)
+
+    # Shape-kind selector must route triangle/arrow through a live canvas tool.
+    pg.locator("#btnDockShapes").click()
+    pg.locator("#btnDockAddPreset").click()
+    pg.wait_for_timeout(200)
+    shape_section_visible = pg.evaluate("getComputedStyle(document.getElementById('popoverShapeSection')).display !== 'none'")
+    pg.locator('.btn-shape-select[data-shape="arrow"]').click()
+    pg.wait_for_timeout(200)
+    arrow_state = pg.evaluate("({ tool: window.state.activeTool, kind: window.state.shapeKind, title: document.getElementById('popoverToolTitle').textContent })")
+    pg.locator("#btnClosePropPopover").click()
+    before_arrow_strokes = pg.evaluate("(window.state.strokes || []).filter(s => !s.deleted).length")
+    wet = pg.locator("#wet").bounding_box()
+    pg.mouse.move(wet["x"] + 250, wet["y"] + 250)
+    pg.mouse.down()
+    pg.mouse.move(wet["x"] + 380, wet["y"] + 315, steps=6)
+    pg.mouse.up()
+    pg.wait_for_timeout(350)
+    after_arrow_strokes = pg.evaluate("(window.state.strokes || []).filter(s => !s.deleted).length")
+    check("arrow/triangle shape selector routes to the canvas pipeline and draws",
+          shape_section_visible and arrow_state["tool"] == "rect" and arrow_state["kind"] == "arrow" and
+          "Arrow" in arrow_state["title"] and after_arrow_strokes == before_arrow_strokes + 1,
+          f"state={arrow_state} before={before_arrow_strokes} after={after_arrow_strokes}")
+
+    pg.locator("#btnDockPen").click()
+    pg.locator("#btnDockAddPreset").click()
+    pg.wait_for_timeout(150)
+    pen_section_hidden = pg.evaluate("getComputedStyle(document.getElementById('popoverShapeSection')).display === 'none'")
+    pg.locator("#btnClosePropPopover").click()
+    check("shape-kind selector is hidden for non-shape tools", pen_section_hidden)
+
+    # -------------------------------------------------------------
+    # T22: Settings Engine Panel Nesting
+    # -------------------------------------------------------------
+    print("\n=== T22 Settings Engine Panel ===", flush=True)
+    pg.evaluate("window.toolbar.openSettingsModal(); window.toolbar.switchSettingsTab('tabPerformance')")
+    pg.wait_for_timeout(250)
+    settings_res = pg.evaluate("""(() => ({
+        selectVisible: !!document.getElementById('selectReadingMode').offsetParent,
+        cards: document.querySelectorAll('#tabPerformance .settings-card').length,
+        panelVisible: !document.getElementById('tabPerformance').classList.contains('hidden')
+    }))()""")
+    check("engine settings panel keeps valid card nesting and a visible reading-mode selector",
+          settings_res["selectVisible"] and settings_res["cards"] >= 4 and settings_res["panelVisible"],
+          f"res={settings_res}")
+    pg.evaluate("window.toolbar.closeSettingsModal()")
+    pg.wait_for_timeout(100)
 
     # -------------------------------------------------------------
     # T14: Console Hygiene

@@ -3,7 +3,7 @@
  * Pure lifecycle orchestrator: connects UI controls, commands, viewport & tools.
  * ========================================================================== */
 
-import { state, $, on, emit } from './core/state.js';
+import { state, $, on, emit, escapeHtml } from './core/state.js';
 import * as history from './core/history.js';
 import * as commandsModule from './core/commands.js';
 import * as documentOps from './core/document.js';
@@ -26,6 +26,7 @@ import * as laserTool from './tools/laser.js';
 import * as navigation from './workspace/navigation.js';
 import * as scrollbar from './workspace/scrollbar.js';
 import * as textSelection from './workspace/text-selection.js';
+import * as annotations from './workspace/annotations.js';
 
 import * as toast from './ui/toast.js';
 import * as toolbar from './ui/toolbar.js';
@@ -33,6 +34,8 @@ import * as drawers from './ui/drawers.js';
 import * as radialMenu from './ui/radial-menu.js';
 import * as contextMenu from './ui/context-menu.js';
 import * as commandPalette from './ui/command-palette.js';
+import * as signature from './ui/signature.js';
+import * as presentation from './ui/presentation.js';
 
 let _viewport = null;
 
@@ -47,8 +50,15 @@ function handlePdfLoadResult(title, pathStr, res) {
   const loadedImages = res.loaded_images || [];
   const loadedTexts = res.loaded_texts || [];
   const outline = res.outline || [];
+  const bookmarks = (res.bookmarks || []).map(b => ({
+    id: b.id,
+    page: b.page,
+    label: b.label,
+    createdAt: b.created_at || b.createdAt || Date.now(),
+  }));
 
   state.outline = outline;
+  state.bookmarks = bookmarks;
   state.currentDocPath = pathStr;
   state.currentDocTitle = title;
 
@@ -57,6 +67,7 @@ function handlePdfLoadResult(title, pathStr, res) {
     strokes: loadedStrokes,
     images: loadedImages,
     textObjects: loadedTexts,
+    bookmarks,
   });
 
   if (_viewport && pageInfos.length > 0) {
@@ -68,6 +79,11 @@ function handlePdfLoadResult(title, pathStr, res) {
   navigation.goToPage(0, 'left', _viewport, false);
   scrollbar.updateDocScrollbar(_viewport);
   drawers.renderOutline();
+  drawers.renderBookmarks();
+  annotations.resetAnnotationsView();
+  const pageBadge = $('badgeThumbnails');
+  if (pageBadge) pageBadge.textContent = String(pageInfos.length || 1);
+  annotations.scheduleAnnotationRefresh();
   if (typeof window.emitZoomChanged === 'function' && _viewport) {
     window.emitZoomChanged(_viewport);
   }
@@ -156,6 +172,37 @@ function prepareAllImagesForSave() {
   return [...templateImages, ...nonDeletedImages];
 }
 
+function openInsertPageModal() {
+  const modal = $('insertPageModal');
+  if (!modal) return;
+  const curSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+
+  const posSel = $('insertPositionSelect');
+  if (posSel) {
+    if (posSel.options[0]) posSel.options[0].textContent = `After Current Page (${curSheet + 1})`;
+    if (posSel.options[1]) posSel.options[1].textContent = `Before Current Page (${curSheet + 1})`;
+    posSel.value = 'after_current';
+  }
+
+  const sizeSel = $('insertPaperSizeSelect');
+  if (sizeSel) sizeSel.value = 'match_current';
+  const customRow = $('customDimRow');
+  if (customRow) customRow.classList.add('hidden');
+
+  const portraitRadio = document.querySelector('input[name="pageOrientation"][value="portrait"]');
+  if (portraitRadio) portraitRadio.checked = true;
+
+  const templateSel = $('insertTemplateSelect');
+  if (templateSel) templateSel.value = 'blank';
+
+  modal.classList.remove('hidden');
+}
+
+function closeInsertPageModal() {
+  const modal = $('insertPageModal');
+  if (modal) modal.classList.add('hidden');
+}
+
 function registerCoreCommands() {
   const reg = commandsModule.commands;
 
@@ -226,6 +273,16 @@ function registerCoreCommands() {
       } finally {
         state.isSaving = false;
       }
+    },
+  });
+
+  reg.register({
+    id: 'file.insertBlankPage',
+    title: 'Insert Blank Page...',
+    category: 'File',
+    shortcut: 'Ctrl+Shift+N',
+    execute: () => {
+      openInsertPageModal();
     },
   });
 
@@ -386,6 +443,7 @@ function registerCoreCommands() {
   reg.register({ id: 'tool.laser', title: 'Laser Pointer', category: 'Tools', shortcut: 'K', execute: () => { toolManager.setTool('laser'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.pan', title: 'Hand / Pan Canvas', category: 'Tools', shortcut: 'H', execute: () => { toolManager.setTool('pan'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.palette', title: 'Ink Color & Width Palette', category: 'Tools', shortcut: 'C', execute: () => { toolbar.togglePropPopover(); } });
+  reg.register({ id: 'tool.signature', title: 'Signature & Stamp Studio', category: 'Tools', shortcut: 'I', execute: () => signature.openSignatureStudio('draw') });
 
   // Navigation commands
   reg.register({
@@ -410,6 +468,33 @@ function registerCoreCommands() {
     },
   });
 
+  reg.register({
+    id: 'nav.goToPage',
+    title: 'Go to Page...',
+    category: 'Navigation',
+    shortcut: 'Ctrl+G',
+    execute: () => {
+      toolbar.openGoToPageModal();
+    },
+  });
+
+  reg.register({
+    id: 'nav.search',
+    title: 'Find in Document',
+    category: 'Navigation',
+    shortcut: 'Ctrl+F',
+    execute: () => {
+      drawers.openDrawer('search');
+      const input = $('drawerSearchInput');
+      if (input) {
+        requestAnimationFrame(() => {
+          input.focus();
+          input.select();
+        });
+      }
+    },
+  });
+
   // View commands
   reg.register({
     id: 'view.toggleSplit',
@@ -418,13 +503,30 @@ function registerCoreCommands() {
     shortcut: 'Ctrl+\\',
     execute: () => {
       if (_viewport) {
-        _viewport.splitMode = !_viewport.splitMode;
+        _viewport.toggleSplitMode();
+        if (_viewport.splitMode && typeof navigation !== 'undefined' && navigation.fitPageInPanes) {
+          navigation.fitPageInPanes(_viewport, compositor.getStageRect(), state.leftSheet || 0, state.rightSheet || 0);
+        }
         $('btnRailSplit') && $('btnRailSplit').classList.toggle('active', _viewport.splitMode);
+        $('btnZoomSplit') && $('btnZoomSplit').classList.toggle('active', _viewport.splitMode);
+        const divider = $('splitDivider');
+        if (divider) {
+          if (_viewport.splitMode) {
+            divider.classList.remove('hidden');
+            divider.style.left = `${((_viewport.splitRatio || 0.5) * 100).toFixed(2)}%`;
+          } else {
+            divider.classList.add('hidden');
+          }
+        }
         const cluster = $('splitPageNavCluster');
         if (cluster) {
           if (_viewport.splitMode) cluster.classList.remove('hidden');
           else cluster.classList.add('hidden');
         }
+        const leftEl = $('leftPanePageNum');
+        if (leftEl) leftEl.textContent = `${(state.leftSheet || 0) + 1}`;
+        const rightEl = $('rightPanePageNum');
+        if (rightEl) rightEl.textContent = `${(state.rightSheet || 0) + 1}`;
         compositor.scheduleRedrawTiles();
         compositor.redrawAll();
       }
@@ -440,13 +542,23 @@ function registerCoreCommands() {
   });
 
   reg.register({
+    id: 'view.presentation',
+    title: 'Presentation Mode',
+    category: 'View',
+    shortcut: 'F5',
+    execute: () => presentation.togglePresentation(),
+  });
+
+  reg.register({
     id: 'view.zoomIn',
     title: 'Zoom In',
     category: 'View',
     shortcut: ['Ctrl+=', 'Ctrl+Shift+=', 'Ctrl++'],
     execute: () => {
       if (_viewport) {
-        _viewport.zoomIn([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
+        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        const bounds = compositor.paneBounds(pane);
+        _viewport.zoomIn([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
@@ -459,7 +571,9 @@ function registerCoreCommands() {
     shortcut: 'Ctrl+-',
     execute: () => {
       if (_viewport) {
-        _viewport.zoomOut([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
+        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        const bounds = compositor.paneBounds(pane);
+        _viewport.zoomOut([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
@@ -472,7 +586,8 @@ function registerCoreCommands() {
     shortcut: 'Ctrl+0',
     execute: () => {
       if (_viewport && state.pageInfos && state.pageInfos[0]) {
-        _viewport.fitPage(state.pageInfos[0].width_pt, state.pageInfos[0].height_pt, 'left');
+        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        _viewport.fitPage(state.pageInfos[0].width_pt, state.pageInfos[0].height_pt, pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
@@ -485,10 +600,27 @@ function registerCoreCommands() {
     shortcut: 'Ctrl+9',
     execute: () => {
       if (_viewport && state.pageInfos && state.pageInfos[0]) {
-        _viewport.fitWidth(state.pageInfos[0].width_pt, 'left');
+        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        _viewport.fitWidth(state.pageInfos[0].width_pt, pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
+  });
+
+  reg.register({
+    id: 'view.cycleReadingMode',
+    title: 'Cycle PDF Reading Mode (Normal / Dark / Sepia)',
+    category: 'View',
+    shortcut: 'Ctrl+Shift+D',
+    execute: () => cycleReadingMode(),
+  });
+
+  reg.register({
+    id: 'view.toggleAnnotations',
+    title: 'Annotations & Review Panel',
+    category: 'View',
+    shortcut: 'Ctrl+Shift+A',
+    execute: () => drawers.toggleDrawer('annotations'),
   });
 
   // Modal commands
@@ -519,7 +651,150 @@ function registerCoreCommands() {
   });
 }
 
+// Reading Mode: 'normal' | 'dark' | 'sepia'
+function setReadingMode(mode) {
+  const validModes = ['normal', 'dark', 'sepia'];
+  const effectiveMode = validModes.includes(mode) ? mode : 'normal';
+  state.readingMode = effectiveMode;
+  try {
+    localStorage.setItem('inkwell.readingMode', effectiveMode);
+  } catch (_) {}
+
+  const tiles = $('tiles');
+  if (tiles) {
+    tiles.classList.toggle('reading-mode-dark', effectiveMode === 'dark');
+    tiles.classList.toggle('reading-mode-sepia', effectiveMode === 'sepia');
+  }
+
+  const select = $('selectReadingMode');
+  if (select) select.value = effectiveMode;
+
+  const btnLabel = $('btnMoreReadingModeLabel');
+  if (btnLabel) {
+    const labelMap = { normal: 'Normal', dark: 'Dark Paper', sepia: 'Sepia Paper' };
+    btnLabel.textContent = `Reading Mode: ${labelMap[effectiveMode] || 'Normal'}`;
+  }
+}
+
+function cycleReadingMode() {
+  const current = state.readingMode || 'normal';
+  const cycleMap = { normal: 'dark', dark: 'sepia', sepia: 'normal' };
+  const next = cycleMap[current] || 'normal';
+  setReadingMode(next);
+  const labelMap = { normal: 'Normal Paper', dark: 'Dark Paper (Night)', sepia: 'Sepia Paper (Comfort)' };
+  toast.showToast(`Reading Mode: ${labelMap[next]}`, 'info');
+}
+
+function initReadingMode() {
+  let stored = 'normal';
+  try {
+    stored = localStorage.getItem('inkwell.readingMode') || 'normal';
+  } catch (_) {}
+  setReadingMode(stored);
+}
+
+function renderShortcutsEditor() {
+  const tbody = $('shortcutsEditorTableBody');
+  if (!tbody) return;
+
+  const allCmds = commandsModule.commands.getAll().filter(cmd => cmd.title);
+  allCmds.sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.title.localeCompare(b.title));
+
+  tbody.innerHTML = allCmds.map(cmd => {
+    const sc = cmd.shortcut;
+    const scDisplay = sc ? (Array.isArray(sc) ? sc.join(', ') : sc) : 'None';
+    return `
+      <tr>
+        <td style="font-weight: 500; font-size: 13px; color: var(--text-main);">${escapeHtml(cmd.title)}</td>
+        <td style="color: var(--text-muted); font-size: 11px;">${escapeHtml(cmd.category || 'General')}</td>
+        <td style="text-align: right;">
+          <button type="button" class="shortcut-recorder-badge" data-cmd-id="${escapeHtml(cmd.id)}" title="Click to rebind shortcut">
+            ${escapeHtml(scDisplay)}
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  let activeRecordingBtn = null;
+  let keydownHandler = null;
+
+  tbody.querySelectorAll('.shortcut-recorder-badge').forEach(badge => {
+    badge.addEventListener('click', e => {
+      e.stopPropagation();
+      const cmdId = badge.getAttribute('data-cmd-id');
+      if (!cmdId) return;
+
+      if (activeRecordingBtn) {
+        activeRecordingBtn.classList.remove('recording');
+        activeRecordingBtn.textContent = activeRecordingBtn._prevText;
+        if (keydownHandler) window.removeEventListener('keydown', keydownHandler, true);
+      }
+
+      activeRecordingBtn = badge;
+      badge._prevText = badge.textContent.trim();
+      badge.textContent = 'Press keys...';
+      badge.classList.add('recording');
+
+      keydownHandler = ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        if (ev.key === 'Escape') {
+          badge.classList.remove('recording');
+          badge.textContent = badge._prevText;
+          window.removeEventListener('keydown', keydownHandler, true);
+          activeRecordingBtn = null;
+          return;
+        }
+
+        if (ev.key === 'Control' || ev.key === 'Alt' || ev.key === 'Shift' || ev.key === 'Meta') {
+          return;
+        }
+
+        const parts = [];
+        if (ev.ctrlKey || ev.metaKey) parts.push('Ctrl');
+        if (ev.altKey) parts.push('Alt');
+        if (ev.shiftKey) parts.push('Shift');
+
+        let k = ev.key;
+        if (k === ' ') k = 'Space';
+        else if (k.length === 1) k = k.toUpperCase();
+        parts.push(k);
+
+        const chord = parts.join('+');
+        commandsModule.commands.setCommandShortcut(cmdId, chord);
+        window.removeEventListener('keydown', keydownHandler, true);
+        activeRecordingBtn = null;
+        renderShortcutsEditor();
+        toast.showToast(`Bound "${chord}" to ${commandsModule.commands.get(cmdId)?.title || cmdId}`, 'success');
+      };
+
+      window.addEventListener('keydown', keydownHandler, true);
+    });
+  });
+}
+
 function bindAllUIEvents() {
+  // Reading mode triggers
+  $('btnMorePresentation') && $('btnMorePresentation').addEventListener('click', () => {
+    const menu = $('moreOptionsMenu');
+    if (menu) menu.classList.add('hidden');
+    presentation.enterPresentation();
+  });
+  $('btnMoreReadingMode') && $('btnMoreReadingMode').addEventListener('click', () => {
+    $('moreOptionsMenu') && $('moreOptionsMenu').classList.add('hidden');
+    cycleReadingMode();
+  });
+  $('selectReadingMode') && $('selectReadingMode').addEventListener('change', e => {
+    setReadingMode(e.target.value);
+  });
+  $('btnResetShortcuts') && $('btnResetShortcuts').addEventListener('click', () => {
+    commandsModule.commands.resetKeybindings();
+    renderShortcutsEditor();
+    toast.showToast('Shortcuts reset to defaults', 'info');
+  });
+
   // File Open triggers
   $('btnHeaderOpen') && $('btnHeaderOpen').addEventListener('click', openFileTrigger);
   $('btnWelcomeOpen') && $('btnWelcomeOpen').addEventListener('click', openFileTrigger);
@@ -532,6 +807,45 @@ function bindAllUIEvents() {
     $('moreOptionsMenu') && $('moreOptionsMenu').classList.add('hidden');
     createNewWhiteboard();
   });
+  $('btnMoreInsertImage') && $('btnMoreInsertImage').addEventListener('click', () => {
+    $('moreOptionsMenu') && $('moreOptionsMenu').classList.add('hidden');
+    const input = $('imageFileInput');
+    if (input) {
+      input.value = '';
+      input.click();
+    }
+  });
+
+  const imageFileInput = $('imageFileInput');
+  if (imageFileInput) {
+    imageFileInput.addEventListener('change', async e => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        const activeSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+        let targetPagePt = null;
+        if (_viewport) {
+          const pl = _viewport.getPageLayout(activeSheet);
+          if (pl) {
+            const pw = pl.width || pl.w || 595.0;
+            const ph = pl.height || pl.h || 842.0;
+            targetPagePt = { px: Math.max(0, pw / 2 - 100), py: Math.max(0, ph / 2 - 100) };
+          }
+        }
+        const dataUrl = await clipboard.blobToDataUrl(file);
+        if (dataUrl) {
+          const pastedImg = await clipboard.pasteImageDataUrl(dataUrl, activeSheet, targetPagePt);
+          if (pastedImg) {
+            compositor.redrawAll();
+            toast.showToast('Inserted image', 'info');
+          }
+        }
+      } catch (err) {
+        console.warn('[inkwell/main] Failed to insert image:', err);
+        toast.showToast('Failed to insert image', 'error');
+      }
+    });
+  }
 
   // Save triggers
   $('btnHeaderSave') && $('btnHeaderSave').addEventListener('click', () => commandsModule.commands.execute('file.save'));
@@ -572,6 +886,43 @@ function bindAllUIEvents() {
   $('btnSplit') && $('btnSplit').addEventListener('click', onSplitToggle);
   $('btnZoomSplit') && $('btnZoomSplit').addEventListener('click', onSplitToggle);
 
+  // Split Divider Dragging and Double-Click Reset
+  const splitDivider = $('splitDivider');
+  if (splitDivider) {
+    let isDraggingDivider = false;
+    splitDivider.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      isDraggingDivider = true;
+      try { splitDivider.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    splitDivider.addEventListener('pointermove', e => {
+      if (!isDraggingDivider || !_viewport) return;
+      const stageRect = compositor.getStageRect() || { left: 0, width: window.innerWidth };
+      const relX = e.clientX - stageRect.left;
+      const totalW = stageRect.width || 800;
+      const ratio = Math.max(0.2, Math.min(0.8, relX / totalW));
+      _viewport.splitRatio = ratio;
+      splitDivider.style.left = `${(ratio * 100).toFixed(2)}%`;
+      compositor.scheduleRedrawTiles();
+      compositor.redrawAll();
+    });
+    const stopDividerDrag = e => {
+      if (isDraggingDivider) {
+        isDraggingDivider = false;
+        try { splitDivider.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    };
+    splitDivider.addEventListener('pointerup', stopDividerDrag);
+    splitDivider.addEventListener('pointercancel', stopDividerDrag);
+    splitDivider.addEventListener('dblclick', () => {
+      if (!_viewport) return;
+      _viewport.splitRatio = 0.5;
+      splitDivider.style.left = '50%';
+      compositor.scheduleRedrawTiles();
+      compositor.redrawAll();
+    });
+  }
+
   // Navigation buttons
   $('btnNavBack') && $('btnNavBack').addEventListener('click', () => navigation.navBack(_viewport));
   $('btnNavForward') && $('btnNavForward').addEventListener('click', () => navigation.navForward(_viewport));
@@ -606,8 +957,9 @@ function bindAllUIEvents() {
     const val = parseFloat(input.value);
     if (!isNaN(val) && val > 0) {
       const targetZoom = Math.max(0.15, Math.min(10.0, val / 100));
-      const stageRect = compositor.getStageRect() || { width: 800, height: 600 };
-      _viewport.setZoom(targetZoom, [stageRect.width / 2, stageRect.height / 2], 'left');
+      const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+      const bounds = compositor.paneBounds(pane);
+      _viewport.setZoom(targetZoom, [bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
       if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       toolbar.closeZoomMenu();
     }
@@ -639,38 +991,10 @@ function bindAllUIEvents() {
     toolbar.toggleFullscreen();
   });
 
-  // Insert Page modal and customization
-  function openInsertPageModal() {
-    const modal = $('insertPageModal');
-    if (!modal) return;
-    const curSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
-
-    const posSel = $('insertPositionSelect');
-    if (posSel) {
-      if (posSel.options[0]) posSel.options[0].textContent = `After Current Page (${curSheet + 1})`;
-      if (posSel.options[1]) posSel.options[1].textContent = `Before Current Page (${curSheet + 1})`;
-      posSel.value = 'after_current';
-    }
-
-    const sizeSel = $('insertPaperSizeSelect');
-    if (sizeSel) sizeSel.value = 'match_current';
-    const customRow = $('customDimRow');
-    if (customRow) customRow.classList.add('hidden');
-
-    const portraitRadio = document.querySelector('input[name="pageOrientation"][value="portrait"]');
-    if (portraitRadio) portraitRadio.checked = true;
-
-    const templateSel = $('insertTemplateSelect');
-    if (templateSel) templateSel.value = 'blank';
-
-    modal.classList.remove('hidden');
-  }
-
-  function closeInsertPageModal() {
-    const modal = $('insertPageModal');
-    if (modal) modal.classList.add('hidden');
-  }
-
+  $('btnMoreAddPage') && $('btnMoreAddPage').addEventListener('click', () => {
+    $('moreOptionsMenu') && $('moreOptionsMenu').classList.add('hidden');
+    openInsertPageModal();
+  });
   $('btnHeaderAddPage') && $('btnHeaderAddPage').addEventListener('click', openInsertPageModal);
   $('btnAddPage') && $('btnAddPage').addEventListener('click', openInsertPageModal);
   $('btnInsertBlank') && $('btnInsertBlank').addEventListener('click', openInsertPageModal);
@@ -812,6 +1136,9 @@ function bindAllUIEvents() {
     clearInk();
   });
   $('btnDocInfoClearInk') && $('btnDocInfoClearInk').addEventListener('click', clearInk);
+  $('btnDocInfoExport') && $('btnDocInfoExport').addEventListener('click', () => commandsModule.commands.execute('file.save'));
+  $('btnDocInfoInsertPage') && $('btnDocInfoInsertPage').addEventListener('click', () => openInsertPageModal());
+  $('btnDocInfoNewWhiteboard') && $('btnDocInfoNewWhiteboard').addEventListener('click', () => createNewWhiteboard());
 
   // Text selection popover actions
   $('btnTextCopy') && $('btnTextCopy').addEventListener('click', () => {
@@ -821,6 +1148,75 @@ function bindAllUIEvents() {
     const pop = $('textSelectionPopover');
     if (pop) pop.classList.add('hidden');
   });
+
+  function applyTextSelectionMarkup(mode) {
+    if (!state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
+    const createdStrokes = [];
+    const timestamp = Date.now();
+
+    for (let i = 0; i < state.textSelection.rects.length; i++) {
+      const r = state.textSelection.rects[i];
+      if (!r || !r.rect) continue;
+      const [x0, y0, x1, y1] = r.rect;
+      const lineH = Math.max(8, y1 - y0);
+      const sheet = r.sheet !== undefined ? r.sheet : (state.textSelection.sheet || 0);
+
+      let kind = 'pen';
+      let rgb = [0.94, 0.27, 0.27];
+      let base_width = 2.0;
+      let y = (y0 + y1) / 2;
+
+      if (mode === 'highlight') {
+        kind = 'highlighter';
+        rgb = state.highlighterColor || [0.98, 0.88, 0.15];
+        base_width = lineH * 0.95;
+        y = (y0 + y1) / 2;
+      } else if (mode === 'underline') {
+        kind = 'pen';
+        rgb = state.penColor || [0.94, 0.27, 0.27];
+        base_width = Math.max(1.2, lineH * 0.08);
+        y = y1 - 1;
+      } else if (mode === 'strikethrough') {
+        kind = 'pen';
+        rgb = state.penColor || [0.94, 0.27, 0.27];
+        base_width = Math.max(1.2, lineH * 0.08);
+        y = (y0 + y1) / 2;
+      }
+
+      const points = [
+        { x: x0, y, p: 0.5 },
+        { x: (x0 + x1) / 2, y, p: 0.5 },
+        { x: x1, y, p: 0.5 }
+      ];
+
+      const stroke = {
+        id: `markup_${mode}_${timestamp}_${i}_${Math.random().toString(36).substring(2, 7)}`,
+        sheet,
+        kind,
+        rgb,
+        base_width,
+        points,
+        deleted: false
+      };
+      if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+        stroke.bbox = window.Ink.computeStrokeBbox(stroke.points, stroke.base_width);
+      }
+      createdStrokes.push(stroke);
+    }
+
+    if (createdStrokes.length) {
+      documentOps.addObjectsBatch({ strokes: createdStrokes });
+      textSelection.clearTextSelection();
+      const pop = $('textSelectionPopover');
+      if (pop) pop.classList.add('hidden');
+      compositor.redrawAll();
+    }
+  }
+  window.applyTextSelectionMarkup = applyTextSelectionMarkup;
+
+  $('btnTextHighlight') && $('btnTextHighlight').addEventListener('click', () => applyTextSelectionMarkup('highlight'));
+  $('btnTextUnderline') && $('btnTextUnderline').addEventListener('click', () => applyTextSelectionMarkup('underline'));
+  $('btnTextStrikethrough') && $('btnTextStrikethrough').addEventListener('click', () => applyTextSelectionMarkup('strikethrough'));
 
   $('btnTextSearch') && $('btnTextSearch').addEventListener('click', () => {
     const text = state.selectedTextString || (state.textSelection && state.textSelection.text);
@@ -937,8 +1333,9 @@ function updateTextSelectionPopover() {
         return;
       }
       const midX = (minX + maxX) / 2;
-      const [sx, syTop] = _viewport.worldToScreen(pl.x + midX, pl.y + minY, 'left');
-      const [, syBottom] = _viewport.worldToScreen(pl.x + midX, pl.y + maxY, 'left');
+      const pane = state.activePane || state.drawingPane || 'left';
+      const [sx, syTop] = _viewport.worldToScreen(pl.x + midX, pl.y + minY, pane);
+      const [, syBottom] = _viewport.worldToScreen(pl.x + midX, pl.y + maxY, pane);
 
       if (syBottom < 30 || syTop > window.innerHeight - 30) {
         pop.classList.add('hidden');
@@ -975,8 +1372,9 @@ function updateLassoSelectionPopover() {
       return;
     }
     const midX = (bounds.x0 + bounds.x1) / 2;
-    const [sx, syTop] = _viewport.worldToScreen(midX, bounds.y0, 'left');
-    const [, syBottom] = _viewport.worldToScreen(midX, bounds.y1, 'left');
+    const pane = state.activePane || state.drawingPane || 'left';
+    const [sx, syTop] = _viewport.worldToScreen(midX, bounds.y0, pane);
+    const [, syBottom] = _viewport.worldToScreen(midX, bounds.y1, pane);
 
     if (syBottom < 30 || syTop > window.innerHeight - 30) {
       pop.classList.add('hidden');
@@ -1023,11 +1421,27 @@ let _panState = {
   pane: 'left',
 };
 
+export function cancelPendingTouchStroke() {
+  if (typeof penTool.onPenCancel === 'function') {
+    penTool.onPenCancel();
+  }
+  state.isErasing = false;
+  state.lassoPath = null;
+  state.shapeStart = null;
+  state.shapeEnd = null;
+  _panState.isDown = false;
+  compositor.clearWet();
+}
+window.cancelPendingTouchStroke = cancelPendingTouchStroke;
+
 function attachPointerHandlers(wetCanvas) {
   if (!wetCanvas) return;
 
   function localXY(e) {
     const pane = compositor.paneForEvent(e);
+    state.activePane = pane;
+    state.drawingPane = pane;
+    if (_viewport) _viewport.activePane = pane;
     const stageEl = $('stage');
     const r = compositor.getStageRect() || (stageEl ? stageEl.getBoundingClientRect() : wetCanvas.getBoundingClientRect());
     const wx = _viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
@@ -1035,6 +1449,16 @@ function attachPointerHandlers(wetCanvas) {
   }
 
   function handleCanvasContextMenu(e) {
+    // Never open the canvas object menu over floating UI chrome. Inputs keep
+    // their native context menu; everything else in the stage is canvas-owned.
+    const uiChrome = e.target && e.target.closest && e.target.closest(
+      '#propPopover, #floatingDock, #zoomControl, #zoomMenuPopover, #textSelectionPopover, #lassoSelectionPopover, #inlineTextEditor, #presentationHud, #presentationBlank, #canvasContextMenu, #docScrollbar, .canvas-edge-nav-btn, .floating-scroll-btn, .modal-overlay, .welcome-dropzone'
+    );
+    if (uiChrome) {
+      if (uiChrome.matches && uiChrome.matches('input, textarea, [contenteditable="true"]')) return;
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     if (e.pointerType === 'pen' && (e.button === 2 || e.buttons === 2 || (e.buttons & 2) !== 0)) {
       return;
@@ -1106,6 +1530,11 @@ function attachPointerHandlers(wetCanvas) {
   }
 
   wetCanvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch' && _viewport && (_viewport.isPinching || _viewport.gestureOccurred || (_viewport.activeTouches && _viewport.activeTouches.size >= 2))) {
+      cancelPendingTouchStroke();
+      e.preventDefault();
+      return;
+    }
     if (e.pointerType === 'pen') {
       state.isStylusActive = true;
       state.lastStylusTime = Date.now();
@@ -1222,6 +1651,10 @@ function attachPointerHandlers(wetCanvas) {
 
   const moveEvt = ('onpointerrawupdate' in window) ? 'pointerrawupdate' : 'pointermove';
   wetCanvas.addEventListener(moveEvt, e => {
+    if (e.pointerType === 'touch' && _viewport && (_viewport.isPinching || _viewport.gestureOccurred || (_viewport.activeTouches && _viewport.activeTouches.size >= 2))) {
+      cancelPendingTouchStroke();
+      return;
+    }
     const tool = state.activeTool || 'pen';
     const coalesced = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
     const events = (coalesced && coalesced.length) ? coalesced : [e];
@@ -1267,12 +1700,15 @@ function attachPointerHandlers(wetCanvas) {
         if (state.isSelectingText && state.textSelectAnchor) {
           const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
           const anchor = state.textSelectAnchor;
-          const hit = textSelection.findCharAndOffsetAtPageCoord(anchor.sheet, pageCoord.px, pageCoord.py);
-          if (hit) {
-            state.textSelection = textSelection.computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex);
-            if (state.textSelection) state.selectedTextString = state.textSelection.text;
-            compositor.redrawAll();
-          }
+          const targetSheet = pageCoord.sheet;
+          textSelection.ensurePageTextData(targetSheet).then(() => {
+            const hit = textSelection.findCharAndOffsetAtPageCoord(targetSheet, pageCoord.px, pageCoord.py, { maxDist: 48 });
+            if (hit) {
+              state.textSelection = textSelection.computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex, targetSheet);
+              if (state.textSelection) state.selectedTextString = state.textSelection.text;
+              compositor.redrawAll();
+            }
+          });
         } else if (state.textSelectPending && state.textSelectPending.isDown) {
           const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
           state.textSelectPending.px = pageCoord.px;
@@ -1283,6 +1719,11 @@ function attachPointerHandlers(wetCanvas) {
   });
 
   wetCanvas.addEventListener('pointerup', e => {
+    if (e.pointerType === 'touch' && _viewport && (_viewport.isPinching || _viewport.gestureOccurred || (_viewport.activeTouches && _viewport.activeTouches.size >= 2))) {
+      cancelPendingTouchStroke();
+      try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
     if (e.button === 2) {
       // Right-click release: handled by contextmenu event
       return;
@@ -1387,6 +1828,7 @@ function initModalFocusTrap() {
     'shortcutsModal',
     'goToPageModal',
     'insertPageModal',
+    'signatureModal',
     'confirmCloseModal',
   ];
 
@@ -1460,7 +1902,9 @@ function attachKeyboardShortcuts() {
         'shortcutsModal',
         'goToPageModal',
         'insertPageModal',
+        'signatureModal',
         'confirmCloseModal',
+        'confirmDeletePageModal',
       ];
       for (const id of openModals) {
         const el = $(id);
@@ -1476,6 +1920,12 @@ function attachKeyboardShortcuts() {
         e.preventDefault();
         return;
       }
+      const zoomPop = $('zoomMenuPopover');
+      if (zoomPop && !zoomPop.classList.contains('hidden')) {
+        toolbar.closeZoomMenu();
+        e.preventDefault();
+        return;
+      }
 
       // Dismiss text selection on Escape
       if (state.textSelection || state.selectedTextString) {
@@ -1483,6 +1933,12 @@ function attachKeyboardShortcuts() {
         const pop = $('textSelectionPopover');
         if (pop) pop.classList.add('hidden');
         compositor.redrawAll();
+        e.preventDefault();
+        return;
+      }
+
+      if (state.activeDrawer) {
+        drawers.closeDrawer();
         e.preventDefault();
         return;
       }
@@ -1534,8 +1990,10 @@ function attachKeyboardShortcuts() {
       return;
     }
 
-    // Spring-loaded modifier keys (e.g. holding 'e')
-    toolManager.handleSpringKeyDown(e.key);
+    // Spring-loaded modifier keys (e.g. holding 'e', 'm', 'v', 'h')
+    if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+      toolManager.handleSpringKeyDown(e.key);
+    }
 
     const cmd = commandsModule.commands.findMatchingShortcut(e);
     if (cmd) {
@@ -1612,6 +2070,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     navigation.goToPage(pageIdx, pane, _viewport);
   });
   drawers.initDrawers();
+  annotations.initAnnotations(_viewport);
+  signature.initSignatureStudio();
+  presentation.initPresentation();
 
   registerCoreCommands();
   toolbar.initToolbar(_viewport);
@@ -1621,6 +2082,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   commandPalette.initCommandPalette();
 
   bindAllUIEvents();
+  initReadingMode();
+  window.onSettingsModalOpened = () => renderShortcutsEditor();
   attachPointerHandlers(wetCanvas);
   attachKeyboardShortcuts();
   toolManager.initStylusIntegration();
@@ -1664,6 +2127,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     scrollbar.updateDocScrollbar(_viewport);
   });
+  on('activePagesChanged', ({ left, right }) => {
+    presentation.updatePresentationHud();
+    const leftEl = $('leftPanePageNum');
+    if (leftEl) leftEl.textContent = `${(left !== undefined ? left : 0) + 1}`;
+    const rightEl = $('rightPanePageNum');
+    if (rightEl) rightEl.textContent = `${(right !== undefined ? right : 0) + 1}`;
+  });
   on('zoomChanged', payload => {
     const el = $('zoomLevelDisplay');
     if (el && payload && typeof payload.zoom === 'number') {
@@ -1680,6 +2150,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
   on('documentChanged', evt => {
     toolbar.updateSaveStatusUI('dirty');
+    annotations.scheduleAnnotationRefresh();
+    const pagesBadge = $('badgeThumbnails');
+    if (pagesBadge) pagesBadge.textContent = String((state.pageInfos || []).length || 1);
+    if (state.activeDrawer === 'thumbnails' && !state._thumbBadgeTimer) {
+      state._thumbBadgeTimer = setTimeout(() => {
+        state._thumbBadgeTimer = null;
+        drawers.refreshThumbnailBadges();
+      }, 450);
+    }
     if (state.autosaveDelayMs > 0 && state.currentDocPath && !state.isSaving) {
       if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
       state.autosaveTimer = setTimeout(() => {
@@ -1734,7 +2213,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.textObj) ipc.journalTextMutation('delete', data.textObj);
     } else if (type === 'undo_delete_text_object' || type === 'redo_add_text_object') {
       if (data.textObj) ipc.journalTextMutation('upsert', data.textObj);
-    } else if (type === 'undo_delete_objects' || type === 'redo_add_objects') {
+    } else if (type === 'add_objects' || type === 'undo_delete_objects' || type === 'redo_add_objects') {
       for (const s of (data.strokes || [])) {
         if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
       }
@@ -1779,6 +2258,80 @@ window.addEventListener('DOMContentLoaded', async () => {
       for (const t of (textList || [])) {
         if (t) ipc.journalTextMutation('upsert', t);
       }
+    } else if (type === 'undo_insert_page' || type === 'redo_delete_page') {
+      const pIdx = data.pageIndex !== undefined ? data.pageIndex : data.targetIndex;
+      if (pIdx !== undefined) {
+        ipc.deletePage(pIdx).catch(err => console.warn('[inkwell/main] deletePage ipc error:', err));
+      }
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      compositor.redrawAll();
+    } else if (type === 'undo_duplicate_page') {
+      const pIdx = data.targetIndex !== undefined ? data.targetIndex : data.pageIndex;
+      if (pIdx !== undefined) {
+        ipc.deletePage(pIdx).catch(err => console.warn('[inkwell/main] deletePage ipc error:', err));
+      }
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      compositor.redrawAll();
+    } else if (type === 'undo_delete_page' || type === 'redo_insert_page') {
+      const pi = data.pageInfo || {};
+      const pIdx = data.pageIndex !== undefined ? data.pageIndex : 0;
+      ipc.insertBlankPage(pIdx, pi.width_pt || 595.0, pi.height_pt || 842.0).catch(err => console.warn('[inkwell/main] insertBlankPage ipc error:', err));
+      if (data.strokes) {
+        for (const s of data.strokes) {
+          if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id).catch(e => {});
+        }
+      }
+      if (data.images) {
+        for (const img of data.images) {
+          if (img) ipc.journalImageMutation('upsert', img);
+        }
+      }
+      if (data.textObjects) {
+        for (const t of data.textObjects) {
+          if (t) ipc.journalTextMutation('upsert', t);
+        }
+      }
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      drawers.renderBookmarks();
+      compositor.redrawAll();
+    } else if (type === 'redo_duplicate_page') {
+      const pi = data.pageInfo || {};
+      const pIdx = data.targetIndex !== undefined ? data.targetIndex : 0;
+      ipc.insertBlankPage(pIdx, pi.width_pt || 595.0, pi.height_pt || 842.0).catch(err => console.warn('[inkwell/main] redo duplicate insertBlankPage ipc error:', err));
+      if (data.clonedStrokes) {
+        for (const s of data.clonedStrokes) {
+          if (s) ipc.commitStroke(s.sheet ?? 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id).catch(e => {});
+        }
+      }
+      if (data.clonedImages) {
+        for (const img of data.clonedImages) {
+          if (img) ipc.journalImageMutation('upsert', img);
+        }
+      }
+      if (data.clonedTexts) {
+        for (const t of data.clonedTexts) {
+          if (t) ipc.journalTextMutation('upsert', t);
+        }
+      }
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      compositor.redrawAll();
+    } else if (type === 'undo_reorder_page' || type === 'redo_reorder_page') {
+      ipc.reorderPages(data.fromIndex, data.toIndex).catch(err => console.warn('[inkwell/main] reorderPages ipc error:', err));
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      compositor.redrawAll();
+    } else if (type === 'rotate_page' || type === 'undo_rotate_page' || type === 'redo_rotate_page') {
+      if (type !== 'rotate_page') {
+        ipc.rotatePage(data.pageIndex, data.clockwise).catch(err => console.warn('[inkwell/main] rotatePage ipc error:', err));
+      }
+      if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
+      drawers.renderThumbnails();
+      compositor.scheduleRedrawTiles();
+      compositor.redrawAll();
     }
   });
 
@@ -1809,7 +2362,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.compositor = compositor;
   window.overlays = overlays;
   window.lassoTool = lassoTool;
+  window.penTool = penTool;
   window.toolbar = toolbar;
+  window.drawers = drawers;
+  window.annotationsPanel = annotations;
+  window.signatureStudio = signature;
+  window.presentation = presentation;
+  window.navigation = navigation;
+  window.emit = emit;
   window.getViewport = getViewport;
   window.undo = () => commandsModule.commands.execute('edit.undo');
   window.redo = () => commandsModule.commands.execute('edit.redo');
@@ -1823,6 +2383,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     const z = vp.splitMode && vp.activePane === 'right' ? vp.rightZoom : vp.zoom;
     emit('zoomChanged', { zoom: z });
   };
+  window.cycleReadingMode = cycleReadingMode;
+  window.setReadingMode = setReadingMode;
 
   window.addEventListener('pointerdown', e => {
     const ctxM = $('canvasContextMenu');

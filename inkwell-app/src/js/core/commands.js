@@ -6,22 +6,93 @@
 class CommandRegistry {
   constructor() {
     this._commands = new Map();
+    this._defaultShortcuts = new Map();
+    this._keymapOverrides = this.loadCustomKeybindings();
+  }
+
+  loadCustomKeybindings() {
+    try {
+      const stored = localStorage.getItem('inkwell.keymap');
+      if (stored) {
+        return JSON.parse(stored) || {};
+      }
+    } catch (e) {
+      console.warn('[inkwell/commands] Failed to parse inkwell.keymap:', e);
+    }
+    return {};
+  }
+
+  saveCustomKeybindings() {
+    try {
+      localStorage.setItem('inkwell.keymap', JSON.stringify(this._keymapOverrides || {}));
+    } catch (e) {
+      console.warn('[inkwell/commands] Failed to save inkwell.keymap:', e);
+    }
   }
 
   register(command) {
     if (!command || !command.id) {
       throw new Error('[inkwell/commands] Command must have a valid id');
     }
+    const defShortcut = command.shortcut || null;
+    this._defaultShortcuts.set(command.id, defShortcut);
+
+    let effectiveShortcut = defShortcut;
+    if (this._keymapOverrides && Object.prototype.hasOwnProperty.call(this._keymapOverrides, command.id)) {
+      effectiveShortcut = this._keymapOverrides[command.id];
+    }
+
     this._commands.set(command.id, {
       id: command.id,
       title: command.title || command.id,
       category: command.category || 'General',
-      shortcut: command.shortcut || null,
+      shortcut: effectiveShortcut,
+      defaultShortcut: defShortcut,
       description: command.description || '',
       icon: command.icon || null,
       execute: command.execute || (() => {}),
       canExecute: command.canExecute || (() => true),
     });
+  }
+
+  setCommandShortcut(commandId, newShortcut) {
+    const targetCmd = this._commands.get(commandId);
+    if (!targetCmd) return false;
+
+    const normNew = newShortcut ? normaliseShortcut(newShortcut) : null;
+
+    if (normNew) {
+      for (const [id, cmd] of this._commands.entries()) {
+        if (id === commandId || !cmd.shortcut) continue;
+        if (Array.isArray(cmd.shortcut)) {
+          const filtered = cmd.shortcut.filter(s => normaliseShortcut(s) !== normNew);
+          if (filtered.length !== cmd.shortcut.length) {
+            cmd.shortcut = filtered.length ? filtered : null;
+            this._keymapOverrides[id] = cmd.shortcut;
+          }
+        } else if (normaliseShortcut(cmd.shortcut) === normNew) {
+          cmd.shortcut = null;
+          this._keymapOverrides[id] = null;
+        }
+      }
+    }
+
+    targetCmd.shortcut = newShortcut || null;
+    this._keymapOverrides[commandId] = targetCmd.shortcut;
+    this.saveCustomKeybindings();
+    return true;
+  }
+
+  resetKeybindings() {
+    this._keymapOverrides = {};
+    try {
+      localStorage.removeItem('inkwell.keymap');
+    } catch (_) {}
+
+    for (const [id, cmd] of this._commands.entries()) {
+      const def = this._defaultShortcuts.get(id) || null;
+      cmd.shortcut = def;
+    }
   }
 
   unregister(id) {

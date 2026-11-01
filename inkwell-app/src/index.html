@@ -47,7 +47,7 @@
         <span class="logo-icon">Ink</span>
         <span class="status-dot green"></span>
       </div>
-      
+
       <button id="btnRailThumbnails" class="rail-btn active" title="Page Thumbnails (Grid)" aria-label="Page thumbnails drawer">
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
         <span id="badgeThumbnails" class="rail-badge green">1</span>
@@ -66,9 +66,10 @@
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
       </button>
 
-      <!-- Feature pending: Layers drawer -->
-      <button id="btnRailLayers" class="rail-btn hidden" title="Ink Vector Layers" aria-label="Ink layers drawer">
-        <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.9a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="m22 12.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 12.5"/><path d="m22 17.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 17.5"/></svg>
+      <!-- Annotation Review drawer -->
+      <button id="btnRailAnnotations" class="rail-btn" title="Annotations &amp; Review (Ctrl+Shift+A)" aria-label="Annotations and review drawer">
+        <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
+        <span id="badgeAnnotations" class="rail-badge annotation-badge hidden">0</span>
       </button>
 
       <button id="btnRailSplit" class="rail-btn" title="Toggle Split View (Dual Pane)" aria-label="Toggle split view">
@@ -96,6 +97,16 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         <span>Clear Page Ink</span>
       </button>
+      <button id="btnMoreInsertImage" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        <span>Insert Image...</span>
+      </button>
+      <button id="btnMoreSignature" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17c3.4-7.2 6-10.2 8-8.4 2.1 1.9-1.9 8.6 1 8.6 2.2 0 3.8-3.2 4.2-4.2"/><path d="M3 21h18"/></svg>
+        <span>Signature &amp; Stamp</span>
+        <span class="more-shortcut">I</span>
+      </button>
+      <input type="file" id="imageFileInput" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">
       <div class="more-menu-divider"></div>
       <button id="btnMorePalette" class="more-menu-item">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -106,6 +117,16 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
         <span>Fullscreen Mode</span>
         <span class="more-shortcut">F11</span>
+      </button>
+      <button id="btnMorePresentation" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>Presentation Mode</span>
+        <span class="more-shortcut">F5</span>
+      </button>
+      <button id="btnMoreReadingMode" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span id="btnMoreReadingModeLabel">Reading Mode: Normal</span>
+        <span class="more-shortcut">Ctrl+Shift+D</span>
       </button>
     </div>
 
@@ -143,8 +164,7 @@
         <div class="empty-state-icon">📑</div>
         <div class="empty-state-title">No Table of Contents</div>
         <div class="empty-state-desc">This PDF does not contain embedded bookmarks or chapter outlines. You can create custom bookmarks for fast navigation.</div>
-        <!-- Feature pending: Custom bookmarks -->
-        <button id="btnOutlineAddBookmark" class="btn-add-bookmark-action hidden">
+        <button id="btnOutlineAddBookmark" class="btn-add-bookmark-action">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
           <span>Bookmark Current Page</span>
         </button>
@@ -155,8 +175,8 @@
     <div id="drawerSearch" class="drawer-content hidden">
       <div class="search-box-wrap">
         <svg class="search-icon-inline" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        <input type="text" id="drawerSearchInput" placeholder="Search in document text..." autocomplete="off">
-        <button id="btnExecuteSearch" class="btn-search-exec">Find</button>
+        <input type="text" id="drawerSearchInput" placeholder="Search in document text..." autocomplete="off" aria-label="Search document text">
+        <button id="btnExecuteSearch" class="btn-search-exec" aria-label="Find search matches">Find</button>
       </div>
       <div id="drawerSearchResults" class="search-results-list">
         <div class="drawer-empty-state">
@@ -169,17 +189,45 @@
 
     <!-- Bookmarks Drawer View -->
     <div id="drawerBookmarks" class="drawer-content hidden">
-      <button id="btnAddBookmark" class="btn-add-bookmark-action">
+      <button id="btnAddBookmark" class="btn-add-bookmark-action" aria-label="Bookmark current page">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
         <span>Bookmark Current Page</span>
       </button>
       <div id="bookmarksList" class="bookmarks-list" style="margin-top:14px;"></div>
     </div>
 
-    <!-- Layers Drawer View -->
-    <div id="drawerLayers" class="drawer-content hidden">
-      <div class="drawer-section-heading">Annotation & Background Layers</div>
-      <div id="layersList" class="layers-list"></div>
+    <!-- Annotation Review Drawer View -->
+    <div id="drawerAnnotations" class="drawer-content hidden">
+      <div class="annotation-toolbar">
+        <div class="annotation-search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" id="annotationSearchInput" placeholder="Search annotations…" autocomplete="off" aria-label="Search annotations">
+        </div>
+        <div id="annotationFilterChips" class="annotation-filter-chips" role="group" aria-label="Filter annotations">
+          <button type="button" class="annotation-filter-chip active" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="annotation-filter-chip" data-filter="ink" aria-pressed="false">Ink</button>
+          <button type="button" class="annotation-filter-chip" data-filter="markup" aria-pressed="false">Markup</button>
+          <button type="button" class="annotation-filter-chip" data-filter="note" aria-pressed="false">Text</button>
+          <button type="button" class="annotation-filter-chip" data-filter="image" aria-pressed="false">Images</button>
+        </div>
+      </div>
+      <div id="annotationList" class="annotation-list">
+        <div class="annotation-empty">
+          <div class="annotation-empty-icon">🖋️</div>
+          <div class="annotation-empty-title">No annotations yet</div>
+          <div class="annotation-empty-desc">Use the pen, highlighter, text or stamp tools. Every mark you make will appear here for fast review.</div>
+        </div>
+      </div>
+      <div class="annotation-footer">
+        <div class="annotation-footer-row">
+          <span id="annotationCountLabel" class="annotation-count-label">0 annotations</span>
+          <button type="button" id="btnAnnotationSummary" class="annotation-summary-btn" title="Copy a page-grouped Markdown summary for Obsidian, Notion or email">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copy summary</span>
+          </button>
+        </div>
+        <span class="annotation-footer-hint">Click an item to select it on the page</span>
+      </div>
     </div>
 
     <!-- Document Info Drawer View -->
@@ -217,19 +265,19 @@
 
       <div class="drawer-section-heading">Document Quick Actions</div>
       <div class="doc-actions-stack">
-        <button id="btnDocInfoExport" class="btn-doc-action primary">
+        <button id="btnDocInfoExport" class="btn-doc-action primary" aria-label="Save and export document as PDF">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           <span>Save & Export PDF</span>
         </button>
-        <button id="btnDocInfoInsertPage" class="btn-doc-action">
+        <button id="btnDocInfoInsertPage" class="btn-doc-action" aria-label="Insert blank page into document">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
           <span>Insert Blank Page</span>
         </button>
-        <button id="btnDocInfoNewWhiteboard" class="btn-doc-action">
+        <button id="btnDocInfoNewWhiteboard" class="btn-doc-action" aria-label="Start blank whiteboard">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
           <span>Start Blank Whiteboard</span>
         </button>
-        <button id="btnDocInfoClearInk" class="btn-doc-action danger">
+        <button id="btnDocInfoClearInk" class="btn-doc-action danger" aria-label="Clear all ink on current page">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           <span>Clear Page Ink</span>
         </button>
@@ -414,16 +462,16 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           <span>Copy</span>
         </button>
-        <!-- PDF annotation writing not yet implemented (Plan 044 follow-up) -->
-        <button id="btnTextHighlight" class="sel-action-btn hidden" title="Highlight Text">
+        <!-- PDF text-markup annotation actions -->
+        <button id="btnTextHighlight" class="sel-action-btn" title="Highlight Text">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
           <span>Highlight</span>
         </button>
-        <button id="btnTextUnderline" class="sel-action-btn hidden" title="Underline Text">
+        <button id="btnTextUnderline" class="sel-action-btn" title="Underline Text">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg>
           <span>Underline</span>
         </button>
-        <button id="btnTextStrikethrough" class="sel-action-btn hidden" title="Strikethrough">
+        <button id="btnTextStrikethrough" class="sel-action-btn" title="Strikethrough">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
           <span>Strike</span>
         </button>
@@ -586,6 +634,21 @@
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>
       </button>
 
+      <!-- Presentation Stage Overlay -->
+      <div id="presentationBlank" class="presentation-blank hidden" aria-hidden="true"></div>
+      <div id="presentationHud" class="present-hud hidden" role="toolbar" aria-label="Presentation controls">
+        <button id="btnPresentPrev" class="present-hud-btn" title="Previous page (←)" aria-label="Previous page">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span id="presentPageLabel" class="present-page-label">1 / 1</span>
+        <button id="btnPresentNext" class="present-hud-btn" title="Next page (→)" aria-label="Next page">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+        <span class="present-hud-divider"></span>
+        <button id="btnPresentBlank" class="present-hud-text-btn" title="Blank screen (B)">Blank</button>
+        <button id="btnPresentExit" class="present-hud-text-btn present-exit" title="Exit presentation (Esc)">Exit</button>
+      </div>
+
       <!-- Floating Vertical Right Scrollbar -->
       <div id="docScrollbar" class="doc-scrollbar">
         <div id="docScrollbarTrack" class="doc-scrollbar-track">
@@ -660,6 +723,7 @@
       <canvas id="tiles"></canvas>
       <canvas id="dry"></canvas>
       <canvas id="wet" class="tool-pen"></canvas>
+      <div id="splitDivider" class="split-divider hidden" role="separator" aria-orientation="vertical" aria-label="Resize split panes" tabindex="0"></div>
 
       <!-- 4. Bottom Floating Inking & Annotation Dock -->
       <div id="floatingDock" class="floating-dock" aria-label="Annotation Dock">
@@ -700,6 +764,11 @@
           <span class="dock-shortcut">R</span>
         </button>
 
+        <button id="btnDockSignature" class="dock-btn" title="Signature &amp; Stamps (I)" aria-label="Signature and stamps">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 17c3.4-7.2 6-10.2 8-8.4 2.1 1.9-1.9 8.6 1 8.6 2.2 0 3.8-3.2 4.2-4.2"/><path d="M14.5 17.5c1.3-.7 2.5-1 3.5-.8"/><path d="M3 21h18"/></svg>
+          <span class="dock-shortcut">I</span>
+        </button>
+
         <button id="btnDockText" class="dock-btn" title="Direct Text Tool (T)" aria-label="Direct text tool">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>
           <span class="dock-shortcut">T</span>
@@ -731,6 +800,30 @@
         <!-- Dynamic Live Stroke Preview Canvas -->
         <div id="popoverStrokePreviewWrap" class="inspector-preview-wrap">
           <canvas id="strokePreviewCanvas" width="260" height="32"></canvas>
+        </div>
+
+        <!-- Shape Kind Selector (Rectangle, Ellipse, Triangle, Line, Arrow) -->
+        <div class="inspector-section" id="popoverShapeSection">
+          <div class="inspector-row-header">
+            <span class="inspector-label">Geometric Shape</span>
+          </div>
+          <div class="shape-kind-row" id="shapeKindRow" style="display:flex;gap:6px;">
+            <button type="button" class="btn-shape-select active" data-shape="rect" title="Rectangle (R)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            </button>
+            <button type="button" class="btn-shape-select" data-shape="ellipse" title="Ellipse / Circle (O)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+            </button>
+            <button type="button" class="btn-shape-select" data-shape="triangle" title="Triangle">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 3 22 21 2 21"/></svg>
+            </button>
+            <button type="button" class="btn-shape-select" data-shape="line" title="Line / Straightedge (L)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="20" x2="20" y2="4"/></svg>
+            </button>
+            <button type="button" class="btn-shape-select" data-shape="arrow" title="Arrow">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="10 5 19 5 19 14"/></svg>
+            </button>
+          </div>
         </div>
 
         <!-- Width Preset Pills & Precision Range Slider -->
@@ -846,6 +939,80 @@
     <div class="modal-footer-info">
       <span class="footer-info-icon">🔒</span>
       <span>Base document bytes are never corrupted or rasterised.</span>
+    </div>
+  </div>
+</div>
+
+<!-- Signature & Stamp Studio Modal -->
+<div id="signatureModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="signatureModalTitle">
+  <div class="modal-card signature-studio-card">
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <h3 id="signatureModalTitle" class="modal-title">Signature &amp; Stamp Studio</h3>
+        <p class="modal-subtitle">Draw, type, or stamp a mark that is embedded as a real PDF image</p>
+      </div>
+      <button id="btnCloseSignatureModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <div class="sig-tabs" role="tablist" aria-label="Signature source">
+      <button type="button" class="sig-tab active" data-sig-tab="draw" role="tab" aria-selected="true">Draw</button>
+      <button type="button" class="sig-tab" data-sig-tab="type" role="tab" aria-selected="false">Type</button>
+      <button type="button" class="sig-tab" data-sig-tab="stamp" role="tab" aria-selected="false">Stamps</button>
+    </div>
+
+    <div class="sig-body">
+      <div id="sigPanelDraw" class="sig-panel">
+        <div id="signaturePadShell" class="sig-pad-shell">
+          <canvas id="signaturePad" width="720" height="240" aria-label="Signature drawing pad"></canvas>
+          <span id="sigPadPlaceholder" class="sig-pad-placeholder">Sign here with mouse, trackpad or stylus</span>
+        </div>
+        <div class="sig-pad-toolbar">
+          <div class="sig-color-row" id="sigColorRow" role="group" aria-label="Ink color">
+            <button type="button" class="sig-color-dot active" data-color="#0f172a" style="--dot:#0f172a" title="Black" aria-label="Black"></button>
+            <button type="button" class="sig-color-dot" data-color="#1e3a8a" style="--dot:#1e3a8a" title="Navy" aria-label="Navy"></button>
+            <button type="button" class="sig-color-dot" data-color="#b91c1c" style="--dot:#b91c1c" title="Red" aria-label="Red"></button>
+          </div>
+          <label class="sig-width-control" for="sigPenWidth">
+            <span>Thickness</span>
+            <input type="range" id="sigPenWidth" min="1.5" max="7" step="0.5" value="3">
+          </label>
+          <button type="button" id="btnSigUndoStroke" class="sig-mini-btn" title="Undo last stroke">Undo</button>
+          <button type="button" id="btnSigClearPad" class="sig-mini-btn" title="Clear signature pad">Clear</button>
+        </div>
+      </div>
+
+      <div id="sigPanelType" class="sig-panel hidden">
+        <input type="text" id="sigTypeInput" class="sig-type-input" placeholder="Type your name…" autocomplete="off" maxlength="64" aria-label="Typed signature text">
+        <div class="sig-font-row" id="sigFontRow" role="group" aria-label="Signature font">
+          <button type="button" class="sig-font-btn active" data-font="cursive" style="font-family:'Caveat', cursive">Signature</button>
+          <button type="button" class="sig-font-btn" data-font="serif" style="font-family:Georgia, 'Times New Roman', serif;font-style:italic">Classic</button>
+          <button type="button" class="sig-font-btn" data-font="sans" style="font-family:Inter, system-ui, sans-serif;font-weight:600">Modern</button>
+        </div>
+        <div class="sig-type-preview">
+          <canvas id="sigTypePreview" width="720" height="180" aria-label="Typed signature preview"></canvas>
+        </div>
+      </div>
+
+      <div id="sigPanelStamp" class="sig-panel hidden">
+        <div id="sigStampGrid" class="sig-stamp-grid" role="group" aria-label="Stamp presets"></div>
+        <p class="sig-stamp-hint">Stamps are transparent vector-ready images. Date stamps always use today's date.</p>
+      </div>
+
+      <div id="sigRecentWrap" class="sig-recent-wrap hidden">
+        <div class="sig-recent-heading">
+          <span>Recent signatures</span>
+          <button type="button" id="btnSigClearRecent" class="sig-clear-recent">Clear</button>
+        </div>
+        <div id="sigRecentList" class="sig-recent-list"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions-row sig-actions-row">
+      <span id="sigInsertHint" class="sig-insert-hint">Draw your signature above</span>
+      <div class="sig-action-buttons">
+        <button type="button" id="btnCancelSignature" class="btn-modal-secondary">Cancel</button>
+        <button type="button" id="btnSigInsert" class="btn-modal-primary">Insert Signature</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1037,6 +1204,8 @@
         <div class="shortcut-row"><span class="shortcut-desc">Fit Page to Window</span><kbd>Ctrl+0</kbd></div>
         <div class="shortcut-row"><span class="shortcut-desc">Split View Dual Pane</span><kbd>Alt+S</kbd></div>
         <div class="shortcut-row"><span class="shortcut-desc">Fullscreen</span><kbd>F11</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Presentation Mode</span><kbd>F5</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Annotations & Review</span><kbd>Ctrl+Shift+A</kbd></div>
       </div>
 
       <div class="shortcut-category">
@@ -1053,6 +1222,7 @@
         <div class="shortcut-row"><span class="shortcut-desc">Text Selection</span><kbd>S</kbd></div>
         <div class="shortcut-row"><span class="shortcut-desc">Pan Tool (Hand)</span><kbd>H</kbd> / <kbd>Space</kbd> <i>(Hold)</i></div>
         <div class="shortcut-row"><span class="shortcut-desc">Color & Width Palette</span><kbd>C</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Signature &amp; Stamp Studio</span><kbd>I</kbd></div>
       </div>
 
       <div class="shortcut-category">
@@ -1303,16 +1473,34 @@
                 <span class="diag-badge green">Active</span>
               </div>
             </div>
+            <div class="settings-card">
+              <div class="setting-header-row">
+                <div class="toggle-text">
+                  <span class="setting-title">PDF Reading Mode</span>
+                  <span class="setting-desc">Applies eye-strain reduction filter to PDF base pages while keeping ink natural</span>
+                </div>
+              </div>
+              <div class="setting-select-wrap" style="margin-top: 10px;">
+                <select id="selectReadingMode" class="custom-select settings-select">
+                  <option value="normal" selected>Normal (Original PDF)</option>
+                  <option value="dark">Dark Paper (Inverted Night Mode)</option>
+                  <option value="sepia">Sepia Paper (Warm Eye Comfort)</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Tab 5: Shortcuts & About -->
         <div id="tabShortcuts" data-panel="tabShortcuts" class="settings-tab-panel hidden">
-          <div class="settings-tab-heading">Keyboard Shortcuts & Version</div>
+          <div class="settings-tab-heading" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Keyboard Shortcuts</span>
+            <button id="btnResetShortcuts" class="btn-secondary" style="font-size: 12px; padding: 4px 10px; min-height: 28px;">Reset to Defaults</button>
+          </div>
 
-          <div class="settings-shortcuts-table-wrap">
+          <div id="shortcutsEditorContainer" class="settings-shortcuts-table-wrap">
             <table class="settings-shortcuts-table">
-              <tbody>
+              <tbody id="shortcutsEditorTableBody">
                 <tr><td><kbd>P</kbd></td><td>Pen Tool</td><td><kbd>Ctrl</kbd> + <kbd>S</kbd></td><td>Save PDF</td></tr>
                 <tr><td><kbd>M</kbd></td><td>Highlighter Tool</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td><td>Undo</td></tr>
                 <tr><td><kbd>E</kbd></td><td>Eraser Tool</td><td><kbd>Ctrl</kbd> + <kbd>Y</kbd></td><td>Redo</td></tr>
@@ -1329,7 +1517,7 @@
             <div class="setting-toggle-row">
               <div class="toggle-text">
                 <span class="setting-title">Inkwell Desktop</span>
-                <span class="setting-desc">Version 0.1.0 • Pure Rust Core + Tauri v2 Desktop Host</span>
+                <span class="setting-desc">Version 0.2.0 • Pure Rust Core + Tauri v2 Desktop Host</span>
               </div>
             </div>
           </div>

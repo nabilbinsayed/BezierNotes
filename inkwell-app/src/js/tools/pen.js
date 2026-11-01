@@ -63,9 +63,6 @@ export function onPenUp(e, viewport) {
   state.penWarmup = 0;
 
   if (stroke.points && stroke.points.length > 0) {
-    if (stroke.points.length > 2 && window.Ink && typeof window.Ink.smoothStrokePoints === 'function') {
-      stroke.points = window.Ink.smoothStrokePoints(stroke.points, 1);
-    }
     if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
       stroke.bbox = window.Ink.computeStrokeBbox(stroke.points, stroke.base_width);
     }
@@ -112,12 +109,20 @@ function consumeSample(e, ptWorld, pane, viewport, shouldRender = true, rawEvent
     p = Math.min(p, 0.35);
   }
   const t = e.timeStamp || performance.now();
+  const z = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+
+  let sx = px;
+  let sy = py;
+  if (state.cur && state.cur._fx && state.cur._fy) {
+    sx = state.cur._fx.filter(px, t);
+    sy = state.cur._fy.filter(py, t);
+  }
 
   if (state.streamline) {
-    const smoothed = state.streamline.filter(px, py, p);
+    const smoothed = state.streamline.filter(sx, sy, p, z);
     consumeFilteredPoint(smoothed.x, smoothed.y, smoothed.p, t, pane, viewport, shouldRender, rawEvent);
   } else {
-    consumeFilteredPoint(px, py, p, t, pane, viewport, shouldRender, rawEvent);
+    consumeFilteredPoint(sx, sy, p, t, pane, viewport, shouldRender, rawEvent);
   }
 }
 
@@ -138,8 +143,28 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport, shouldRender = true,
   const pt = { x: px, y: py, p, w, t };
   if (!state.cur.points) state.cur.points = [];
   state.cur.points.push(pt);
+
+  // Incremental online tail smoothing: smooth pts[pts.length - 2] in-place
+  // so live wet stroke and final committed stroke are identical with zero commit snap
+  if (state.cur.points.length >= 3) {
+    const curPts = state.cur.points;
+    const p0 = curPts[curPts.length - 3];
+    const p1 = curPts[curPts.length - 2];
+    const p2 = pt;
+    const v0x = p1.x - p0.x, v0y = p1.y - p0.y;
+    const v1x = p2.x - p1.x, v1y = p2.y - p1.y;
+    const l0 = Math.hypot(v0x, v0y), l1 = Math.hypot(v1x, v1y);
+    const isCorner = (l0 > 0.1 && l1 > 0.1) && ((v0x * v1x + v0y * v1y) / (l0 * l1) < 0.25);
+    if (!isCorner) {
+      p1.x = 0.25 * p0.x + 0.5 * p1.x + 0.25 * p2.x;
+      p1.y = 0.25 * p0.y + 0.5 * p1.y + 0.25 * p2.y;
+      const w0 = p0.w || 2.0, w1 = p1.w || 2.0, w2 = p2.w || 2.0;
+      p1.w = 0.25 * w0 + 0.5 * w1 + 0.25 * w2;
+    }
+  }
+
   if (state.cur.samples) {
-    state.cur.samples.push([+px.toFixed(3), +py.toFixed(3), +p.toFixed(4), +t.toFixed(1)]);
+    state.cur.samples.push([+pt.x.toFixed(3), +pt.y.toFixed(3), +p.toFixed(4), +t.toFixed(1)]);
   }
   const r = w / 2;
   if (!state.cur.bbox) {
@@ -183,10 +208,9 @@ export function renderActiveWetStroke(pane, viewport, rawEvent = null) {
           for (let k = 0; k < preds.length; k++) {
             const predEvt = preds[k];
             const wx = viewport.screenToWorld(predEvt.clientX - r.left, predEvt.clientY - r.top, pane);
-            const pc = viewport.worldToPage(wx[0], wx[1]);
             predicted.push({
-              x: pc.px,
-              y: pc.py,
+              x: pl ? (wx[0] - pl.x) : wx[0],
+              y: pl ? (wx[1] - pl.y) : wx[1],
               p: lastPt.p,
               w: lastPt.w,
               t: predEvt.timeStamp || performance.now(),
@@ -201,9 +225,7 @@ export function renderActiveWetStroke(pane, viewport, rawEvent = null) {
   }
 
   // 2. Real-time online curve smoothing for silky fluidity during active drawing
-  const renderPts = (displayPts.length > 2 && window.Ink && typeof window.Ink.smoothStrokePoints === 'function')
-    ? window.Ink.smoothStrokePoints(displayPts, 1)
-    : displayPts;
+  const renderPts = displayPts;
 
   // 3. Render to wet canvas
   compositor.clearWet();

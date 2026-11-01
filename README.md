@@ -81,6 +81,10 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 - **Append-Only Incremental Save:** Inkwell preserves the original PDF bytes, appending updated xref tables and objects so base documents are never corrupted in-place.
 - **Temp-Dir WAL Crash Durability:** System temporary directory Write-Ahead Logging (`inkwell-wal`) commits every stroke with immediate `fsync`, effortlessly recovering unsaved work after crashes without thrashing cloud sync folders.
 - **Hierarchical Table of Contents & Bookmarks:** Recursive PDF outline extraction with collapsible tree navigation and direct page jumps.
+- **Annotation Review & Audit (`Ctrl+Shift+A`):** Page-grouped list of every ink stroke, highlight, text note, image, signature and stamp with type filters, full-text search, click-to-jump selection, undoable delete, and one-click Markdown summary export for Obsidian, Notion or email.
+- **Signature & Stamp Studio (`I`):** Draw or type a signature in a bundled handwriting face (Caveat, OFL), or drop a professional stamp (Approved, Reviewed, Draft, Confidential, Paid, Void, Received, today's Date). Marks are inserted as native PDF images, saved locally for reuse, and stay fully undoable.
+- **Chrome-Free Presentation Mode (`F5`):** Fit-and-centre the active page on a black stage with auto-dimming controls, arrow-key paging, a blank-screen cut (`B`) and the laser pointer, restoring your previous zoom, pan and tool on exit.
+- **Lazy Thumbnail Rail:** Thumbnails paint on demand in small frame budgets, show per-page annotation counts, render embedded images and stamps, and keep the active page scrolled into view on 100+ page notebooks.
 - **High-Precision PDF Text Selection (`S`):** Character-level bounding box resolution, persistent visual highlights, and instant clipboard copy.
 
 ### 🎛️ Unified Selection, Transform & Toolsuite
@@ -88,7 +92,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 - **Clipboard & Object History:** Cut (`Ctrl+X`), Copy (`Ctrl+C`), Paste (`Ctrl+V`), Duplicate (`Ctrl+D`), and Select All on active page (`Ctrl+A`) with full multi-level Undo/Redo.
 - **Image Pasting & Embedding:** Paste screenshots directly from the clipboard (`Ctrl+V`), resize/reposition interactively, and embed natively as PDF image objects.
 - **Interactive Sticky Notes (`T`):** Place editable text notes anywhere on the document canvas, embedded as real PDF text objects on save.
-- **Geometric Shapes (`R`, `O`, `L`):** Vector rectangles, ellipses, and straight ruler lines with live preview overlays.
+- **Geometric Shapes (`R`, `O`, `L`):** Vector rectangles, ellipses, triangles, arrows, and straight ruler lines with live preview overlays, angle/length HUDs and 15° snapping.
 - **Radial Quick Menu (`Right-Click` / Barrel Button):** Stylus-friendly 6-slot floating quick action wheel for distraction-free tool switching.
 - **Command Palette (`Ctrl+K` / `Ctrl+Shift+P`):** Global command search and keyboard launcher.
 
@@ -150,6 +154,9 @@ InkWell/
 | **Laser Pointer** | `K` | Ephemeral glowing presentation pointer |
 | **Sticky Note** | `T` | Interactive floating keyboard text note |
 | **Text Selection** | `S` | Character-level PDF text selection and copy |
+| **Signature & Stamp Studio** | `I` | Draw, type or stamp a signature into the PDF |
+| **Annotations & Review** | `Ctrl` + `Shift` + `A` | Audit, search, jump to and delete annotations |
+| **Presentation Mode** | `F5` | Chrome-free fit-page stage; `B` blanks, `Esc` exits |
 | **Pan / Hand Tool** | `H` / `Space` | Pan canvas viewport (tap Space to quick-toggle, hold to pan) |
 | **Radial Quick Menu** | `Right Click` / Barrel | Stylus 6-slot floating quick action wheel |
 | **Select All** | `Ctrl` + `A` | Select all strokes and objects on the active page |
@@ -180,6 +187,7 @@ Inkwell is in active development with a verified baseline across all core subsys
 - **Incremental PDF Writing:** Non-destructive append-only PDF output compliant with standard readers.
 - **Split-View Study Mode:** Independent pan and zoom across dual document viewports.
 - **Continuous Layout & Text Selection:** Seamless multi-page scrolling, hierarchical TOC outline, and accurate character-range selection.
+- **Review, Signing & Presentation:** Annotation audit drawer with Markdown export, native PDF signature/stamp insertion, and a chrome-free presentation stage.
 
 ### 🚧 In Active Development / Next Up
 1. **Full Layer 3 Sidecar Serialization for All Media:**
@@ -228,7 +236,7 @@ cargo run
 Inkwell enforces strict quality assurance across its native systems code:
 
 ```bash
-# 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests (77 tests)
+# 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests
 cd inkwell
 cargo test --workspace -- --test-threads=1
 
@@ -238,7 +246,7 @@ cargo clippy --all-targets
 
 # 3. Run production desktop frontend smoke suite
 cd inkwell-app
-python3 test_app_smoke.py  # (or py -3 test_app_smoke.py)
+py -3 test_app_smoke.py     # 126 desktop checks
 ```
 
 ---

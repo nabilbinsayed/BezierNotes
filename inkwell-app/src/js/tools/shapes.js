@@ -17,7 +17,32 @@ export function onShapeDown(e, ptWorld, pane, viewport) {
 
 export function onShapeMove(e, ptWorld, pane, viewport) {
   if (!state.shapeStart) return;
-  state.shapeEnd = [ptWorld[0], ptWorld[1]];
+  let endX = ptWorld[0];
+  let endY = ptWorld[1];
+
+  if (e && e.shiftKey) {
+    const startX = state.shapeStart[0];
+    const startY = state.shapeStart[1];
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const kind = state.shapeKind || 'rect';
+
+    if (kind === 'line' || kind === 'ruler' || kind === 'arrow') {
+      const dist = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx);
+      // Snap to nearest 15° increment (Math.PI / 12)
+      const snapped = Math.round(angle / (Math.PI / 12)) * (Math.PI / 12);
+      endX = startX + dist * Math.cos(snapped);
+      endY = startY + dist * Math.sin(snapped);
+    } else {
+      // rect, ellipse, triangle: constrain |dx| === |dy|
+      const size = Math.max(Math.abs(dx), Math.abs(dy));
+      endX = startX + (dx >= 0 ? size : -size);
+      endY = startY + (dy >= 0 ? size : -size);
+    }
+  }
+
+  state.shapeEnd = [endX, endY];
   
   compositor.clearWet();
   const { wctx } = compositor.getContexts();
@@ -86,13 +111,84 @@ export function onShapeUp(e, viewport) {
         w: state.baseWidth,
       });
     }
-  } else if (kind === 'line') {
+  } else if (kind === 'triangle') {
+    const v0 = [(px0 + px1) / 2, py0];
+    const v1 = [px1, py1];
+    const v2 = [px0, py1];
+    const vertices = [v0, v1, v2, v0];
+    const samplesPerEdge = 16;
+    for (let edge = 0; edge < 3; edge++) {
+      const pA = vertices[edge];
+      const pB = vertices[edge + 1];
+      for (let i = (edge === 0 ? 0 : 1); i <= samplesPerEdge; i++) {
+        const t = i / samplesPerEdge;
+        points.push({
+          x: pA[0] + t * (pB[0] - pA[0]),
+          y: pA[1] + t * (pB[1] - pA[1]),
+          p: 0.8,
+          w: state.baseWidth,
+        });
+      }
+    }
+  } else if (kind === 'line' || kind === 'ruler') {
     const steps = 20;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       points.push({
         x: px0 + t * dx,
         y: py0 + t * dy,
+        p: 0.8,
+        w: state.baseWidth,
+      });
+    }
+  } else if (kind === 'arrow') {
+    // Shaft
+    const steps = 20;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      points.push({
+        x: px0 + t * dx,
+        y: py0 + t * dy,
+        p: 0.8,
+        w: state.baseWidth,
+      });
+    }
+    // Filled arrowhead wings at ±28°
+    const angle = Math.atan2(dy, dx);
+    const arrowLen = Math.max(10, (state.baseWidth || 1.6) * 4.5);
+    const wingAngle = 28 * Math.PI / 180;
+    const ax1 = px1 - arrowLen * Math.cos(angle - wingAngle);
+    const ay1 = py1 - arrowLen * Math.sin(angle - wingAngle);
+    const ax2 = px1 - arrowLen * Math.cos(angle + wingAngle);
+    const ay2 = py1 - arrowLen * Math.sin(angle + wingAngle);
+
+    // Wing 1
+    const wingSteps = 8;
+    for (let i = 1; i <= wingSteps; i++) {
+      const t = i / wingSteps;
+      points.push({
+        x: px1 + t * (ax1 - px1),
+        y: py1 + t * (ay1 - py1),
+        p: 0.8,
+        w: state.baseWidth,
+      });
+    }
+    // Across to wing 2
+    for (let i = 1; i <= wingSteps; i++) {
+      const t = i / wingSteps;
+      points.push({
+        x: ax1 + t * (ax2 - ax1),
+        y: ay1 + t * (ay2 - ay1),
+        p: 0.8,
+        w: state.baseWidth,
+      });
+    }
+    // Return to apex
+    for (let i = 1; i <= wingSteps; i++) {
+      const t = i / wingSteps;
+      points.push({
+        x: ax2 + t * (px1 - ax2),
+        y: ay2 + t * (py1 - ay2),
         p: 0.8,
         w: state.baseWidth,
       });

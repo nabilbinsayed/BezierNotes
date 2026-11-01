@@ -39,6 +39,11 @@ The architecture is partitioned into:
 | F16 | Smoke Test Suite Expansion | Comprehensive test cases in `test_app_smoke.py` covering Spacebar toggle/pan, text selection, and context menu | M3 | Survey |
 | F17 | Rust Workspace Test Suite Verification | Full verification of 72 unit/integration tests with zero failures/panics | M3 | Survey |
 | F18 | Clippy & Static Analysis Cleanliness | Zero compiler warnings and clean static analysis across all crates | M3 | Survey |
+| F19 | Annotation Review Drawer | Page-grouped, filterable, searchable audit of all annotations with jump-to-selection, undoable delete and Markdown summary export | M4 | Plan 077 |
+| F20 | Signature & Stamp Studio | Draw/type signatures and eight professional stamp presets inserted as native PDF images with local recents | M4 | Plan 077 |
+| F21 | Presentation Mode | Chrome-free fit-page stage with arrow paging, blank-screen cut, laser pointer and state restore | M4 | Plan 077 |
+| F22 | Lazy Thumbnail Rail | IntersectionObserver-gated canvas painting, image thumbnails, per-page annotation badges and true page counts | M4 | Plan 077 |
+| F23 | Interaction Polish | Persistent custom colour slots, shape routing for arrow/triangle, context-menu chrome guard, toast system v2, settings nesting fix | M4 | Plan 077 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -46,6 +51,7 @@ The architecture is partitioned into:
 | M1 | Tool Repair & Interaction Polish | Spacebar toggle/pan, PDF text selection & copy, context menu, radial menu, command palette, tool history tracking (F01-F12) | none | DONE |
 | M2 | UI/UX & Touch Ergonomics Optimization | Touch target expansion (>=44x44px), CSS focus/toast polish, rendering latency hygiene (F13-F15) | M1 | DONE |
 | M3 | Comprehensive Verification & Smoke Suite | Expand `test_app_smoke.py` with spacebar, text selection, context menu checks; verify 100% test pass on Rust & desktop smoke tests (F16-F18) | M1, M2 | DONE |
+| M4 | Review, Signing, Presentation & Smoothness | Annotation review, signature/stamp studio, presentation mode, lazy thumbnails, interaction polish (F19-F23) | M1-M3 | DONE |
 
 ## Interface Contracts
 ### `toolManager` ↔ `state`
