@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgSplit" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#030712"/>
+    </linearGradient>
+
+    <!-- Wing / Ribbon Gradient Left -->
+    <linearGradient id="wingGradL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+
+    <!-- Wing / Ribbon Gradient Right -->
+    <linearGradient id="wingGradR" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+
+    <filter id="splitGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect width="512" height="512" rx="112" fill="url(#bgSplit)"/>
+  <rect width="510" height="510" x="1" y="1" rx="111" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+
+  <!-- Left Dynamic Arc flowing from Nib -->
+  <path d="M 256 120 C 256 220, 100 240, 100 350 C 100 420, 190 420, 240 370"
+        fill="none" stroke="url(#wingGradL)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#splitGlow)"/>
+
+  <!-- Right Dynamic Arc flowing from Nib -->
+  <path d="M 256 120 C 256 220, 412 240, 412 350 C 412 420, 322 420, 272 370"
+        fill="none" stroke="url(#wingGradR)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#splitGlow)"/>
+
+  <!-- Geometric Minimalist Nib Silhouette Overlaid -->
+  <g transform="translate(0, 0)">
+    <!-- Nib Core Shape in Crisp Titanium White -->
+    <path d="M 256 116 L 210 200 L 226 270 L 286 270 L 302 200 Z" fill="#ffffff"/>
+    <path d="M 256 116 L 256 270 L 286 270 L 302 200 Z" fill="#e2e8f0"/>
+    <!-- Nib Breather Hole -->
+    <circle cx="256" cy="190" r="8" fill="#111827"/>
+    <!-- Nib Slit -->
+    <line x1="256" y1="116" x2="256" y2="182" stroke="#111827" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Precision Tangent Handles & Points -->
+  <line x1="100" y1="350" x2="60" y2="350" stroke="#38bdf8" stroke-width="2.5"/>
+  <circle cx="60" cy="350" r="6" fill="#38bdf8"/>
+  <circle cx="100" cy="350" r="7" fill="#ffffff" stroke="#38bdf8" stroke-width="3"/>
+
+  <line x1="412" y1="350" x2="452" y2="350" stroke="#818cf8" stroke-width="2.5"/>
+  <circle cx="452" cy="350" r="6" fill="#818cf8"/>
+  <circle cx="412" cy="350" r="7" fill="#ffffff" stroke="#818cf8" stroke-width="3"/>
+</svg>

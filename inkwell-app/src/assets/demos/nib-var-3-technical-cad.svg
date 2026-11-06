@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgCad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1320"/>
+      <stop offset="100%" stop-color="#030710"/>
+    </linearGradient>
+
+    <linearGradient id="cadCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+
+    <linearGradient id="nibMetal3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="50%" stop-color="#94a3b8"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect width="512" height="512" rx="112" fill="url(#bgCad)"/>
+  <rect width="510" height="510" x="1" y="1" rx="111" fill="none" stroke="rgba(56,189,248,0.2)" stroke-width="2"/>
+
+  <!-- CAD Coordinate Grid and Arcs -->
+  <g opacity="0.18" stroke="#38bdf8" stroke-width="1.2">
+    <circle cx="256" cy="256" r="160" fill="none" stroke-dasharray="6 6"/>
+    <circle cx="256" cy="256" r="90" fill="none" stroke-dasharray="3 3"/>
+    <line x1="96" y1="256" x2="416" y2="256" stroke-dasharray="4 4"/>
+    <line x1="256" y1="96" x2="256" y2="416" stroke-dasharray="4 4"/>
+  </g>
+
+  <!-- Sweeping Bezier Curve with Control Tangent Vectors -->
+  <!-- Tangent Construction Arms -->
+  <line x1="120" y1="360" x2="200" y2="420" stroke="#38bdf8" stroke-width="2" opacity="0.6"/>
+  <line x1="392" y1="360" x2="312" y2="420" stroke="#38bdf8" stroke-width="2" opacity="0.6"/>
+  <line x1="256" y1="160" x2="360" y2="160" stroke="#38bdf8" stroke-width="2" opacity="0.6"/>
+
+  <!-- The Main Bezier Ribbon -->
+  <path d="M 120 360 C 200 420, 312 420, 392 360 C 430 330, 420 220, 340 180 C 290 160, 256 160, 256 160"
+        fill="none" stroke="url(#cadCyan)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Technical Anchor Rings -->
+  <circle cx="120" cy="360" r="9" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <circle cx="120" cy="360" r="3" fill="#ffffff"/>
+
+  <circle cx="392" cy="360" r="9" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <circle cx="392" cy="360" r="3" fill="#ffffff"/>
+
+  <circle cx="340" cy="180" r="9" fill="none" stroke="#38bdf8" stroke-width="3"/>
+  <circle cx="340" cy="180" r="3" fill="#ffffff"/>
+
+  <!-- Precision Technical Fountain Pen Nib -->
+  <g transform="translate(0, 0)">
+    <!-- Base Shape -->
+    <path d="M 256 156 L 206 60 L 226 20 L 286 20 L 306 60 Z" fill="url(#nibMetal3)"/>
+    <!-- Center Slit with glowing cyan -->
+    <line x1="256" y1="156" x2="256" y2="86" stroke="#38bdf8" stroke-width="3"/>
+    <!-- Breather Ring -->
+    <circle cx="256" cy="80" r="7" fill="#0b1320" stroke="#38bdf8" stroke-width="2.5"/>
+  </g>
+
+  <!-- Crosshairs at the Nib Tip Contact Point -->
+  <g stroke="#ffffff" stroke-width="2" opacity="0.9">
+    <line x1="246" y1="156" x2="266" y2="156"/>
+    <line x1="256" y1="146" x2="256" y2="166"/>
+  </g>
+  <circle cx="256" cy="156" r="4" fill="#38bdf8"/>
+</svg>

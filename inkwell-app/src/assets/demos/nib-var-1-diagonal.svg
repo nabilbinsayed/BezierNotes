@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgDiag" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#151b26"/>
+      <stop offset="50%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#05070a"/>
+    </linearGradient>
+
+    <!-- Metallic Nib Gradient -->
+    <linearGradient id="metalNib1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="45%" stop-color="#e2e8f0"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
+    </linearGradient>
+    <linearGradient id="metalNib2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#cbd5e1"/>
+      <stop offset="50%" stop-color="#94a3b8"/>
+      <stop offset="100%" stop-color="#64748b"/>
+    </linearGradient>
+
+    <!-- Glowing Vector Curve Gradient -->
+    <linearGradient id="glowCurve" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="60%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+
+    <filter id="diagShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="-4" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#38bdf8" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect width="512" height="512" rx="112" fill="url(#bgDiag)"/>
+  <rect width="510" height="510" x="1" y="1" rx="111" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+
+  <!-- Subtle Blueprint Calibration Grid -->
+  <g opacity="0.1" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 5">
+    <line x1="80" y1="80" x2="432" y2="432"/>
+    <circle cx="216" cy="296" r="120" fill="none"/>
+  </g>
+
+  <!-- Sweeping Bezier Ribbon flowing across the canvas -->
+  <path d="M 216 296 C 140 372, 110 420, 160 440 C 220 460, 340 380, 420 320 C 470 280, 430 200, 360 190 C 280 180, 240 240, 216 296"
+        fill="none" stroke="url(#glowCurve)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Tangent Handles & Anchors on the Ribbon -->
+  <!-- Anchor 1 -->
+  <circle cx="420" cy="320" r="7" fill="#ffffff" stroke="#38bdf8" stroke-width="3"/>
+  <line x1="420" y1="320" x2="455" y2="280" stroke="#38bdf8" stroke-width="2.5" opacity="0.85"/>
+  <circle cx="455" cy="280" r="5" fill="#38bdf8"/>
+
+  <!-- Anchor 2 -->
+  <circle cx="360" cy="190" r="7" fill="#ffffff" stroke="#6366f1" stroke-width="3"/>
+  <line x1="360" y1="190" x2="310" y2="160" stroke="#6366f1" stroke-width="2.5" opacity="0.85"/>
+  <circle cx="310" cy="160" r="5" fill="#6366f1"/>
+
+  <!-- 45-Degree Precision Fountain Pen Nib -->
+  <g transform="translate(216, 296) rotate(-45)" filter="url(#diagShadow)">
+    <!-- Left Blade -->
+    <path d="M 0 0 L -46 -110 L -22 -170 L -3 -170 L -3 -60 Z" fill="url(#metalNib1)"/>
+    <!-- Right Blade -->
+    <path d="M 0 0 L 46 -110 L 22 -170 L 3 -170 L 3 -60 Z" fill="url(#metalNib2)"/>
+    <!-- Breather Hole -->
+    <circle cx="0" cy="-60" r="8" fill="#0d1117"/>
+    <!-- Center Slit with cyan glow -->
+    <line x1="0" y1="0" x2="0" y2="-52" stroke="#38bdf8" stroke-width="2.5"/>
+  </g>
+
+  <!-- Glowing Contact Point at Nib Tip -->
+  <circle cx="216" cy="296" r="6" fill="#38bdf8"/>
+  <circle cx="216" cy="296" r="2.5" fill="#ffffff"/>
+</svg>

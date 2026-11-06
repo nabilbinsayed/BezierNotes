@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="50%" stop-color="#0b0f19"/>
+      <stop offset="100%" stop-color="#030712"/>
+    </linearGradient>
+
+    <!-- Main Dynamic Ribbon Gradient -->
+    <linearGradient id="ribbonGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe"/>
+      <stop offset="45%" stop-color="#4facfe"/>
+      <stop offset="100%" stop-color="#7928ca"/>
+    </linearGradient>
+
+    <!-- Accent Secondary Ribbon Gradient -->
+    <linearGradient id="ribbonGrad2" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff0080"/>
+      <stop offset="70%" stop-color="#7928ca"/>
+      <stop offset="100%" stop-color="#4facfe"/>
+    </linearGradient>
+
+    <filter id="neonGlow2" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad2)"/>
+  <rect width="510" height="510" x="1" y="1" rx="111" fill="none" stroke="rgba(255,255,255,0.09)" stroke-width="2"/>
+
+  <!-- Geometric Grid Background (subtle) -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="rgba(255, 255, 255, 0.03)" stroke-width="1"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="rgba(255, 255, 255, 0.03)" stroke-width="1"/>
+
+  <!-- Fluid Vector Ribbon 'B' -->
+  <g filter="url(#neonGlow2)">
+    <!-- Lower Bowl of 'B' (passes under/behind) -->
+    <path d="M 168 256 C 240 256, 368 250, 368 356 C 368 436, 260 416, 172 416"
+          fill="none" stroke="url(#ribbonGrad2)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Stem & Upper Loop of 'B' -->
+    <path d="M 172 416 L 172 110 C 172 96, 184 96, 204 96 C 290 96, 344 120, 344 200 C 344 260, 260 256, 168 256"
+          fill="none" stroke="url(#ribbonGrad1)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Precision Tangent Handles & Control Points (Signature Bezier Motif) -->
+  <!-- Top Handle -->
+  <line x1="204" y1="96" x2="310" y2="76" stroke="#00f2fe" stroke-width="2.5" stroke-dasharray="3 3"/>
+  <circle cx="310" cy="76" r="6" fill="#00f2fe"/>
+  <circle cx="204" cy="96" r="6" fill="#ffffff" stroke="#00f2fe" stroke-width="2"/>
+
+  <!-- Middle Intersection Point -->
+  <circle cx="168" cy="256" r="7" fill="#ffffff" stroke="#4facfe" stroke-width="2.5"/>
+
+  <!-- Bottom Bowl Tangent Handle -->
+  <line x1="368" y1="356" x2="396" y2="420" stroke="#ff0080" stroke-width="2.5" stroke-dasharray="3 3"/>
+  <circle cx="396" cy="420" r="6" fill="#ff0080"/>
+  <circle cx="368" cy="356" r="6" fill="#ffffff" stroke="#ff0080" stroke-width="2"/>
+</svg>
