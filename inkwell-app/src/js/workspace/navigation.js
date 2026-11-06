@@ -38,7 +38,8 @@ export function goToPage(pageIdx, pane = 'left', viewport = null, recordNav = tr
     pushNav(pageIdx);
   }
 
-  if (pane === 'right' && viewport && viewport.splitMode) {
+  const isRight = pane === 'right' && viewport && viewport.splitMode;
+  if (isRight) {
     state.rightSheet = pageIdx;
   } else {
     state.leftSheet = pageIdx;
@@ -48,12 +49,15 @@ export function goToPage(pageIdx, pane = 'left', viewport = null, recordNav = tr
     viewport.scrollToPage(pageIdx, pane);
   }
 
-  emit('pageChanged', { pageIndex: pageIdx, pane, totalPages: state.pageInfos.length });
+  emit('pageChanged', { pageIndex: pageIdx, pane: isRight ? 'right' : 'left', totalPages: state.pageInfos.length });
+  if (viewport && viewport.splitMode) {
+    emit('activePagesChanged', { left: state.leftSheet, right: state.rightSheet });
+  }
   compositor.scheduleRedrawTiles();
   compositor.redrawAll();
 }
 
-export function fitPageInPanes(viewport, stageRect, piLeft = state.pageInfos[state.leftSheet], piRight = state.pageInfos[state.rightSheet]) {
+export function fitPageInPanes(viewport, stageRect, piLeft = state.pageInfos[state.leftSheet], piRight = state.pageInfos[state.rightSheet], targetPane = null) {
   if (!piLeft || !viewport) return;
   if (!stageRect) compositor.updateStageRect();
   const r = stageRect || compositor.getStageRect() || { width: 800, height: 600 };
@@ -64,35 +68,50 @@ export function fitPageInPanes(viewport, stageRect, piLeft = state.pageInfos[sta
   const maxW = viewport.maxDocWidth || piLeft.width_pt || 595.0;
 
   if (viewport.splitMode && piRight) {
-    const halfW = stageW / 2;
-    const availW = Math.max(100, halfW - margin);
+    const leftW = Math.round(stageW * (viewport.splitRatio || 0.5));
+    const rightW = stageW - leftW;
+    const availLeftW = Math.max(100, leftW - margin);
+    const availRightW = Math.max(100, rightW - margin);
     const availH = Math.max(100, stageH - margin);
 
-    const fitZoomLeft = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piLeft.height_pt)));
-    const fitZoomRight = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piRight.height_pt)));
-    const fitZoom = Math.min(fitZoomLeft, fitZoomRight);
+    const fitZoomLeft = Math.max(0.2, Math.min(4.0, Math.min(availLeftW / maxW, availH / (piLeft.height_pt || 842.0))));
+    const fitZoomRight = Math.max(0.2, Math.min(4.0, Math.min(availRightW / maxW, availH / (piRight.height_pt || 842.0))));
 
-    viewport.zoom = fitZoom;
-    viewport.rightZoom = fitZoom;
+    const layoutLeft = viewport.getPageLayout(state.leftSheet || 0);
+    const layoutRight = viewport.getPageLayout(state.rightSheet || 0);
 
-    const layoutLeft = viewport.getPageLayout(state.leftSheet);
-    const layoutRight = viewport.getPageLayout(state.rightSheet);
+    if (targetPane === 'left') {
+      viewport.zoom = fitZoomLeft;
+      viewport.panX = Math.round((leftW - maxW * fitZoomLeft) / 2);
+      viewport.panY = Math.round(-(layoutLeft ? layoutLeft.y : 0) * fitZoomLeft + 30);
+    } else if (targetPane === 'right') {
+      viewport.rightZoom = fitZoomRight;
+      viewport.rightPanX = Math.round(leftW + (rightW - maxW * fitZoomRight) / 2);
+      viewport.rightPanY = Math.round(-(layoutRight ? layoutRight.y : 0) * fitZoomRight + 30);
+    } else {
+      const fitZoom = Math.min(fitZoomLeft, fitZoomRight);
+      viewport.zoom = fitZoom;
+      viewport.rightZoom = fitZoom;
 
-    viewport.panX = Math.round((halfW - maxW * fitZoom) / 2);
-    viewport.panY = Math.round(-layoutLeft.y * fitZoom + 30);
+      viewport.panX = Math.round((leftW - maxW * fitZoom) / 2);
+      viewport.panY = Math.round(-(layoutLeft ? layoutLeft.y : 0) * fitZoom + 30);
 
-    viewport.rightPanX = Math.round(halfW + (halfW - maxW * fitZoom) / 2);
-    viewport.rightPanY = Math.round(-layoutRight.y * fitZoom + 30);
+      viewport.rightPanX = Math.round(leftW + (rightW - maxW * fitZoom) / 2);
+      viewport.rightPanY = Math.round(-(layoutRight ? layoutRight.y : 0) * fitZoom + 30);
+    }
   } else {
     const availW = Math.max(100, stageW - margin);
     const availH = Math.max(100, stageH - margin);
-    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piLeft.height_pt)));
+    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / (piLeft.height_pt || 842.0))));
     viewport.zoom = fitZoom;
-    const layoutLeft = viewport.getPageLayout(state.leftSheet);
+    const layoutLeft = viewport.getPageLayout(state.leftSheet || 0);
     viewport.panX = Math.round((stageW - maxW * fitZoom) / 2);
-    viewport.panY = Math.round(-layoutLeft.y * fitZoom + 30);
+    viewport.panY = Math.round(-(layoutLeft ? layoutLeft.y : 0) * fitZoom + 30);
   }
 
+  if (typeof window !== 'undefined' && typeof window.emitZoomChanged === 'function') {
+    window.emitZoomChanged(viewport);
+  }
   compositor.scheduleRedrawTiles();
   compositor.redrawAll();
 }

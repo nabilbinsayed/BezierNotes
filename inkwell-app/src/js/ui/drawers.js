@@ -10,8 +10,13 @@ import * as textSelection from '../workspace/text-selection.js';
 import * as compositor from '../render/compositor.js';
 import * as documentOps from '../core/document.js';
 import * as annotations from '../workspace/annotations.js';
+import * as tiles from '../render/tiles.js';
 
 let _goToPageCallback = null;
+
+function getTargetNavPane() {
+  return (state.splitMode && (state.activePane === 'right' || state.drawingPane === 'right')) ? 'right' : 'left';
+}
 
 export function setGoToPageCallback(cb) {
   _goToPageCallback = cb;
@@ -282,7 +287,8 @@ export function renderBookmarks() {
       if (e.target.closest('.bookmark-delete-btn')) return;
       const pageIdx = parseInt(card.dataset.page, 10);
       if (!isNaN(pageIdx) && typeof _goToPageCallback === 'function') {
-        _goToPageCallback(pageIdx, 'left');
+        const targetPane = getTargetNavPane();
+        _goToPageCallback(pageIdx, targetPane);
         list.querySelectorAll('.bookmark-card').forEach(c => c.classList.remove('active'));
         card.classList.add('active');
       }
@@ -453,17 +459,48 @@ function countAnnotationsOnPage(pageIndex) {
   return n;
 }
 
-function drawThumbnailCanvas(canvas, idx, pi) {
+export async function drawThumbnailCanvas(canvas, idx, pi) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
+  if (!pi) pi = (state.pageInfos && state.pageInfos[idx]) || { width_pt: 595, height_pt: 842 };
   const thumbW = canvas.width;
   const thumbH = canvas.height;
-  const scale = thumbW / (pi.width_pt || 595);
+  const pw = (pi && pi.width_pt > 0) ? pi.width_pt : 595;
+  const ph = (pi && pi.height_pt > 0) ? pi.height_pt : 842;
+  const scale = thumbW / pw;
 
   ctx.clearRect(0, 0, thumbW, thumbH);
 
-  // 1. Background template
-  templates.drawPageBackground(ctx, 0, 0, thumbW, thumbH, pi.template || 'blank', 1.0);
+  // 1. Background template (paper color + guidelines)
+  const tmpl = (pi && pi.template) ? pi.template : 'blank';
+  const isDark = tmpl === 'dark';
+  ctx.fillStyle = isDark ? '#0f172a' : '#ffffff';
+  ctx.fillRect(0, 0, thumbW, thumbH);
+
+  if (tmpl !== 'blank') {
+    ctx.save();
+    ctx.scale(thumbW / pw, thumbH / ph);
+    templates.drawPageTemplateGuidelines(ctx, tmpl, pw, ph);
+    ctx.restore();
+  }
+
+  // Real PDF page content (if not dark template)
+  if (!isDark) {
+    try {
+      const baseSpan = (pw <= 512 && ph <= 512) ? 512 : Math.max(pw, ph);
+      const px = Math.round((thumbW / pw) * baseSpan);   // backend output width = pw*px/baseSpan = thumbW
+      const res = await tiles.fetchTile(idx, [0, 0, pw, ph], px);
+      const isDetachedFromDom = canvas.parentElement && !canvas.isConnected;
+      if (!isDetachedFromDom && res && res.data) {
+        ctx.drawImage(res.data, 0, 0, thumbW, thumbH);
+      }
+    } catch (e) {
+      console.warn('[inkwell/thumb] page render failed', idx, e);
+    }
+  }
+
+  const isDetachedFromDom = canvas.parentElement && !canvas.isConnected;
+  if (isDetachedFromDom) return;
 
   // 2. Images on this sheet (loaded elements are cached on _el / element)
   const images = (state.images || []).filter(im => im.sheet === idx && !im.deleted);
@@ -534,10 +571,12 @@ function drawThumbnailCanvas(canvas, idx, pi) {
   }
 }
 
-function paintThumbJob(job) {
+async function paintThumbJob(job) {
   if (!job || !job.card || !job.card.isConnected) return;
-  drawThumbnailCanvas(job.canvas, job.idx, job.pi);
-  job.card.classList.add('thumb-rendered');
+  await drawThumbnailCanvas(job.canvas, job.idx, job.pi);
+  if (job.card && job.card.isConnected) {
+    job.card.classList.add('thumb-rendered');
+  }
 }
 
 /**
@@ -549,7 +588,7 @@ function scheduleThumbPaint() {
   if (_thumbFrame) return;
   _thumbFrame = requestAnimationFrame(() => {
     _thumbFrame = null;
-    let budget = 3;
+    let budget = 2;
     for (const [key, job] of _thumbQueue) {
       _thumbQueue.delete(key);
       paintThumbJob(job);
@@ -585,6 +624,20 @@ export function refreshThumbnailBadges() {
   if (railBadge) railBadge.textContent = String((state.pageInfos || []).length || 1);
 }
 
+export function updateThumbnailActiveCards() {
+  const grid = $('thumbnailGrid');
+  if (!grid) return;
+  const isSplit = !!state.splitMode;
+  grid.querySelectorAll('.thumb-card').forEach(card => {
+    const idx = parseInt(card.getAttribute('data-page'), 10);
+    const isLeft = (idx === state.leftSheet);
+    const isRight = (isSplit && idx === state.rightSheet);
+    card.classList.toggle('active', isLeft || isRight);
+    card.classList.toggle('active-left', isLeft);
+    card.classList.toggle('active-right', isRight);
+  });
+}
+
 export function renderThumbnails() {
   const grid = $('thumbnailGrid');
   if (!grid || !state.pageInfos || !state.pageInfos.length) return;
@@ -618,8 +671,13 @@ export function renderThumbnails() {
   _thumbObserver = observer;
 
   state.pageInfos.forEach((pi, idx) => {
+    const isLeft = (idx === state.leftSheet);
+    const isRight = (state.splitMode && idx === state.rightSheet);
+    let cardClasses = 'thumb-card';
+    if (isLeft) cardClasses += ' active active-left';
+    if (isRight) cardClasses += ' active active-right';
     const card = document.createElement('div');
-    card.className = 'thumb-card' + (idx === state.leftSheet ? ' active' : '');
+    card.className = cardClasses;
     card.setAttribute('data-page', idx);
     card.setAttribute('draggable', 'true');
 
@@ -667,7 +725,7 @@ export function renderThumbnails() {
     // Thumbnail Canvas Preview (painted lazily when scrolled into view)
     const canvas = document.createElement('canvas');
     canvas.className = 'thumb-canvas';
-    const thumbW = 120;
+    const thumbW = 240;
     const thumbH = Math.round(thumbW * ((pi.height_pt || 842) / (pi.width_pt || 595)));
     canvas.width = thumbW;
     canvas.height = thumbH;
@@ -689,11 +747,28 @@ export function renderThumbnails() {
     // Card click navigation
     card.addEventListener('click', e => {
       if (e.target.closest('.thumb-card-actions')) return;
+      const targetPane = getTargetNavPane();
       if (typeof _goToPageCallback === 'function') {
-        _goToPageCallback(idx, 'left');
+        _goToPageCallback(idx, targetPane);
       }
-      grid.querySelectorAll('.thumb-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
+      if (state.splitMode) {
+        if (targetPane === 'right') {
+          grid.querySelectorAll('.thumb-card.active-right').forEach(c => {
+            c.classList.remove('active-right');
+            if (!c.classList.contains('active-left')) c.classList.remove('active');
+          });
+          card.classList.add('active', 'active-right');
+        } else {
+          grid.querySelectorAll('.thumb-card.active-left').forEach(c => {
+            c.classList.remove('active-left');
+            if (!c.classList.contains('active-right')) c.classList.remove('active');
+          });
+          card.classList.add('active', 'active-left');
+        }
+      } else {
+        grid.querySelectorAll('.thumb-card').forEach(c => c.classList.remove('active', 'active-left', 'active-right'));
+        card.classList.add('active');
+      }
     });
 
     // HTML5 Drag-and-Drop Reordering
@@ -732,7 +807,7 @@ export function renderThumbnails() {
     grid.appendChild(card);
 
     if (observer) observer.observe(card);
-    queueThumbnail(card, canvas, idx, pi, idx < 3);
+    queueThumbnail(card, canvas, idx, pi, idx < 2);
   });
 
   // Keep the active page visible when the drawer opens on a deep page.
@@ -789,7 +864,8 @@ export function renderOutline() {
       if (pageStr !== '' && typeof _goToPageCallback === 'function') {
         const pageIdx = parseInt(pageStr, 10);
         if (!isNaN(pageIdx)) {
-          _goToPageCallback(pageIdx, 'left');
+          const targetPane = getTargetNavPane();
+          _goToPageCallback(pageIdx, targetPane);
           container.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
           header.closest('.outline-item').classList.add('active');
         }
@@ -945,7 +1021,8 @@ export function renderSearchResults(searchItems) {
       if (pageStr !== '' && typeof _goToPageCallback === 'function') {
         const pageIdx = parseInt(pageStr, 10);
         if (!isNaN(pageIdx)) {
-          _goToPageCallback(pageIdx, 'left');
+          const targetPane = getTargetNavPane();
+          _goToPageCallback(pageIdx, targetPane);
           container.querySelectorAll('.search-result-card').forEach(item => item.classList.remove('active'));
           el.classList.add('active');
         }

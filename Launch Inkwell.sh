@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch Inkwell on Linux
+# Launch BezierNotes on Linux
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,6 +44,6 @@ elif [ -n "$RELEASE_BIN" ]; then
 elif [ -n "$DEBUG_BIN" ]; then
     exec "$DEBUG_BIN" "$@"
 else
-    echo "Inkwell binary not found. Build it with: cargo build --release -p inkwell-app"
+    echo "BezierNotes binary not found. Build it with: cargo build --release -p inkwell-app"
     exit 1
 fi

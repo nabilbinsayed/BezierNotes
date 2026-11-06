@@ -63,7 +63,19 @@ with sync_playwright() as pw:
         const scale = px / baseSpan;
         const tileW = Math.round(rw * scale) || 1;
         const tileH = Math.round(rh * scale) || 1;
-        return new Array(tileW * tileH * 4).fill(128);
+        const buf = new Array(tileW * tileH * 4);
+        for (let y = 0; y < tileH; y++) {
+          for (let x = 0; x < tileW; x++) {
+            const idx = (y * tileW + x) * 4;
+            const isText = (y % 32 < 4) && (x % 24 < 16);
+            const val = isText ? 32 : 255;
+            buf[idx] = val;
+            buf[idx + 1] = val;
+            buf[idx + 2] = val;
+            buf[idx + 3] = 255;
+          }
+        }
+        return buf;
       },
       get_page_text_data: async (args) => ({
         page_index: (args && args.pageIndex !== undefined) ? args.pageIndex : 0,
@@ -230,6 +242,9 @@ with sync_playwright() as pw:
 
     # Tool history tracking verification
     pg.evaluate("window.toolManager.setTool('pen')")
+    pen_cursor = pg.evaluate("window.getComputedStyle(document.getElementById('wet')).cursor")
+    check("getComputedStyle(#wet.tool-pen).cursor contains 8 8", "8 8" in pen_cursor or "8px 8px" in pen_cursor, f"cursor={pen_cursor}")
+
     pg.evaluate("window.toolManager.setTool('highlighter')")
     last_act_1 = pg.evaluate("window.state.lastActiveTool")
     check("tool history tracks pen as lastActiveTool after switching to highlighter", last_act_1 == "pen", f"actual={last_act_1}")
@@ -1006,8 +1021,10 @@ with sync_playwright() as pw:
         return rules.some(r =>
             r.selectorText &&
             r.selectorText.includes(':focus-visible') &&
-            (r.style.outline.includes('7c3aed') || r.style.outline.includes('rgb(124, 58, 237)') ||
-             r.style.outlineColor.includes('124, 58, 237') || r.style.outlineColor.includes('7c3aed'))
+            (r.style.outline.includes('3b82f6') || r.style.outline.includes('rgb(59, 130, 246)') ||
+             r.style.outlineColor.includes('59, 130, 246') || r.style.outlineColor.includes('3b82f6') ||
+             r.style.outline.includes('2563eb') || r.style.outline.includes('rgb(37, 99, 235)') ||
+             r.style.outline.includes('7c3aed') || r.style.outline.includes('rgb(124, 58, 237)'))
         );
     }""")
     check("universal :focus-visible high-contrast outline rules present in stylesheet", focus_visible_rule_exists)
@@ -1644,7 +1661,10 @@ with sync_playwright() as pw:
         window.state.isSearching = true;
 
         window.documentOps.setDocument({
-            pageInfos: [{ page_index: 0, width_pt: 612, height_pt: 792 }],
+            pageInfos: [
+                { page_index: 0, width_pt: 612, height_pt: 792 },
+                { page_index: 1, width_pt: 612, height_pt: 792 }
+            ],
             strokes: []
         });
     })()""")
@@ -1693,11 +1713,16 @@ with sync_playwright() as pw:
             clusterVisible: cluster && !cluster.classList.contains('hidden'),
             railActive: btnRail && btnRail.classList.contains('active'),
             zoomActive: btnZoom && btnZoom.classList.contains('active'),
+            zoom: window.getViewport().zoom,
+            rightSheet: window.state.rightSheet,
         };
     })()""")
     check("toggling view.toggleSplit activates split mode, displays divider and buttons",
           split_initial["splitMode"] and split_initial["dividerVisible"] and split_initial["clusterVisible"] and
           split_initial["railActive"] and split_initial["zoomActive"],
+          f"res={split_initial}")
+    check("split toggle on page 1 sets viewport.zoom to a finite number and state.rightSheet == 1",
+          math.isfinite(split_initial["zoom"]) and split_initial["zoom"] > 0 and split_initial["rightSheet"] == 1,
           f"res={split_initial}")
 
     # 2. Opening a drawer while in split mode preserves .active on #btnRailSplit
@@ -1739,29 +1764,114 @@ with sync_playwright() as pw:
           divider_drag_ok["dragRatioNear60"] and divider_drag_ok["widthMatchesDrag"] and divider_drag_ok["resetToHalf"],
           f"res={divider_drag_ok}")
 
-    # 4. Navigating the right pane updates #rightPanePageNum via activePagesChanged
-    nav_right_ok = pg.evaluate("""(() => {
-        window.emit('activePagesChanged', { left: 0, right: 3 });
+    # 4. Navigating panes and per-pane independent zoom
+    split_nav_zoom_ok = pg.evaluate("""(() => {
+        if (!window.getViewport().splitMode) {
+            window.commands.execute('view.toggleSplit'); // ensure split mode is on
+        }
+        const vp = window.getViewport();
         const leftEl = document.getElementById('leftPanePageNum');
         const rightEl = document.getElementById('rightPanePageNum');
-        const leftTxt = leftEl ? leftEl.textContent : '';
-        const rightTxt = rightEl ? rightEl.textContent : '';
+        const hlLeft = document.getElementById('paneHighlightLeft');
+        const hlRight = document.getElementById('paneHighlightRight');
 
-        // Reset split mode back to off
+        // Test pointerdown pane activation
+        const stage = document.getElementById('stage');
+        const r = stage.getBoundingClientRect();
+        stage.dispatchEvent(new PointerEvent('pointerdown', { clientX: r.left + r.width * 0.75, clientY: r.top + 50, bubbles: true }));
+        const activePaneAfterClick = window.state.drawingPane;
+        const rightHlActive = hlRight && hlRight.classList.contains('pane-active');
+
+        // Set 4 pages so we can navigate
+        window.documentOps.setDocument({
+            pageInfos: [
+                { page_index: 0, width_pt: 612, height_pt: 792 },
+                { page_index: 1, width_pt: 612, height_pt: 792 },
+                { page_index: 2, width_pt: 612, height_pt: 792 },
+                { page_index: 3, width_pt: 612, height_pt: 792 }
+            ],
+            strokes: []
+        });
+        if (!window.getViewport().splitMode) {
+            window.commands.execute('view.toggleSplit');
+        }
+
+        // Test right pane navigation button
+        const btnRightNext = document.getElementById('btnRightPaneNext');
+        if (btnRightNext) btnRightNext.click();
+        const rightBadgeAfterNext = rightEl ? rightEl.textContent : '';
+
+        // Test per-pane independent zoom
+        const zoomLeftBefore = vp.zoom;
+        const btnRightZoomIn = document.getElementById('btnRightZoomIn');
+        if (btnRightZoomIn) btnRightZoomIn.click();
+        const zoomLeftAfterRightZoom = vp.zoom;
+        const zoomRightAfterZoom = vp.rightZoom;
+        const leftZoomUnaffected = (zoomLeftBefore === zoomLeftAfterRightZoom);
+        const rightZoomIncreased = (zoomRightAfterZoom > zoomLeftBefore);
+
+        // Test btnRightZoomFit fits right pane without resetting left zoom
+        const btnRightZoomFit = document.getElementById('btnRightZoomFit');
+        if (btnRightZoomFit) btnRightZoomFit.click();
+        const zoomLeftAfterRightFit = vp.zoom;
+        const leftZoomStillUnaffected = (zoomLeftBefore === zoomLeftAfterRightFit);
+
+        // Test split thumbnail integration and active card highlighting
+        window.drawers.renderThumbnails();
+        const card0 = document.querySelector('.thumb-card[data-page="0"]');
+        const card2 = document.querySelector('.thumb-card[data-page="2"]');
+        const card0IsLeft = card0 && card0.classList.contains('active-left');
+        const card2IsRight = card2 && card2.classList.contains('active-right');
+
+        // Test thumbnail click targeting active pane (right pane active)
+        const card3 = document.querySelector('.thumb-card[data-page="3"]');
+        if (card3) card3.click();
+        const rightSheetAfterThumbClick = window.state.rightSheet;
+        const leftSheetAfterThumbClick = window.state.leftSheet;
+
+        // Toggle split off and restore original 2-page document fixture
         window.commands.execute('view.toggleSplit');
         const splitOff = !window.getViewport().splitMode;
         const dividerHidden = document.getElementById('splitDivider').classList.contains('hidden');
 
+        window.documentOps.setDocument({
+            pageInfos: [
+                { page_index: 0, width_pt: 612, height_pt: 792 },
+                { page_index: 1, width_pt: 612, height_pt: 792 }
+            ],
+            strokes: []
+        });
+
         return {
-            leftText: leftTxt === '1',
-            rightText: rightTxt === '4',
+            activePaneAfterClick,
+            rightHlActive,
+            rightBadgeAfterNext,
+            leftZoomUnaffected,
+            rightZoomIncreased,
+            leftZoomStillUnaffected,
+            card0IsLeft,
+            card2IsRight,
+            rightSheetAfterThumbClick,
+            leftSheetAfterThumbClick,
             splitOff,
             dividerHidden
         };
     })()""")
-    check("navigating right pane updates #rightPanePageNum via activePagesChanged, toggle restores single pane",
-          nav_right_ok["leftText"] and nav_right_ok["rightText"] and nav_right_ok["splitOff"] and nav_right_ok["dividerHidden"],
-          f"res={nav_right_ok}")
+    check("clicking stage right pane activates drawingPane and pane highlight",
+          split_nav_zoom_ok["activePaneAfterClick"] == 'right' and split_nav_zoom_ok["rightHlActive"],
+          f"res={split_nav_zoom_ok}")
+    check("navigating right pane updates #rightPanePageNum badge to page 3",
+          split_nav_zoom_ok["rightBadgeAfterNext"] == '3',
+          f"res={split_nav_zoom_ok}")
+    check("per-pane zoom in and fit buttons isolate zoom to target pane without altering other pane",
+          split_nav_zoom_ok["leftZoomUnaffected"] and split_nav_zoom_ok["rightZoomIncreased"] and split_nav_zoom_ok["leftZoomStillUnaffected"],
+          f"res={split_nav_zoom_ok}")
+    check("split view highlights left and right page cards with distinct active-left and active-right indicators",
+          split_nav_zoom_ok["card0IsLeft"] and split_nav_zoom_ok["card2IsRight"],
+          f"res={split_nav_zoom_ok}")
+    check("clicking a thumbnail card navigates the currently active pane in split view",
+          split_nav_zoom_ok["rightSheetAfterThumbClick"] == 3 and split_nav_zoom_ok["leftSheetAfterThumbClick"] == 0,
+          f"res={split_nav_zoom_ok}")
 
     # 5. Trackpad gesturestart / gesturechange updates zoom without throwing relY ReferenceError
     gesture_res = pg.evaluate("""(() => {
@@ -2147,6 +2257,39 @@ with sync_playwright() as pw:
           thumb_res["rendered"] >= 1 and thumb_res["annoBadges"] == thumb_res["pages"],
           f"res={thumb_res}")
     check("thumbnail rail badge reports the true page count", thumb_res["railBadge"] == str(thumb_res["pages"]), f"res={thumb_res}")
+    thumb_pixel_res = pg.evaluate("""(() => {
+        const canvas = document.querySelector('#thumbnailGrid .thumb-card.thumb-rendered canvas.thumb-canvas');
+        if (!canvas) return { ok: false, reason: 'no rendered canvas' };
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return { ok: false, reason: 'no 2d context' };
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let firstR = data[0], firstG = data[1], firstB = data[2];
+        let nonUniform = false;
+        for (let i = 4; i < data.length; i += 4) {
+            if (data[i] !== firstR || data[i+1] !== firstG || data[i+2] !== firstB) {
+                nonUniform = true;
+                break;
+            }
+        }
+        return { ok: nonUniform, width: canvas.width, height: canvas.height };
+    })()""")
+    check("thumbnail canvas has non-uniform pixels after render",
+          thumb_pixel_res["ok"] and thumb_pixel_res["width"] == 240,
+          f"res={thumb_pixel_res}")
+    thumb_template_res = pg.evaluate("""(async () => {
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = 240;
+        offCanvas.height = 340;
+        // Verify true offscreen canvas renders without needing document.body.appendChild
+        await window.drawers.drawThumbnailCanvas(offCanvas, 999, { width_pt: 595, height_pt: 842, template: 'dark' });
+        const ctx = offCanvas.getContext('2d');
+        const data = ctx.getImageData(0, 0, offCanvas.width, offCanvas.height).data;
+        const isDarkSlate = data[0] === 15 && data[1] === 23 && data[2] === 42;
+        return { ok: isDarkSlate, r: data[0], g: data[1], b: data[2], isConnected: offCanvas.isConnected };
+    })()""")
+    check("thumbnail canvas renders dark stationery template on standalone offscreen canvas",
+          thumb_template_res["ok"] and not thumb_template_res["isConnected"],
+          f"res={thumb_template_res}")
     pg.evaluate("window.drawers.closeDrawer()")
     pg.wait_for_timeout(150)
 

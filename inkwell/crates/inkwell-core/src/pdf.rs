@@ -463,7 +463,11 @@ impl PdfFile {
             } else {
                 s.samples.clone()
             };
-            let centreline: Vec<(f64, f64)> = simplified.iter().step_by(2).map(|sm| (sm.x, sm.y)).collect();
+            let centreline: Vec<(f64, f64)> = if simplified.len() <= 2 {
+                simplified.iter().map(|sm| (sm.x, sm.y)).collect()
+            } else {
+                simplified.iter().step_by(2).map(|sm| (sm.x, sm.y)).collect()
+            };
             inklist.push('[');
             for (x, y) in centreline {
                 let x_pdf = llx + x;

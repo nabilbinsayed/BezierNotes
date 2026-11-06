@@ -87,8 +87,9 @@ export function paneBounds(pane = 'left') {
   const width = r.width > 0 ? r.width : 800;
   const height = r.height > 0 ? r.height : 600;
   if (!_viewport || !_viewport.splitMode) return { x: 0, y: 0, width, height };
-  const half = width / 2;
-  return pane === 'right' ? { x: half, y: 0, width: half, height } : { x: 0, y: 0, width: half, height };
+  const ratio = _viewport.splitRatio || 0.5;
+  const splitX = Math.round(width * ratio);
+  return pane === 'right' ? { x: splitX, y: 0, width: Math.max(100, width - splitX), height } : { x: 0, y: 0, width: Math.max(100, splitX), height };
 }
 
 export function visiblePanes() {
@@ -101,7 +102,8 @@ export function paneForEvent(e) {
   if (_viewport && typeof _viewport.paneAtScreenX === 'function') {
     return _viewport.paneAtScreenX(e.clientX - r.left);
   }
-  return _viewport && _viewport.splitMode && (e.clientX - r.left > r.width / 2) ? 'right' : 'left';
+  const ratio = (_viewport && _viewport.splitRatio) || 0.5;
+  return _viewport && _viewport.splitMode && (e.clientX - r.left > r.width * ratio) ? 'right' : 'left';
 }
 
 export function paneTransform(ctx, pane = 'left') {

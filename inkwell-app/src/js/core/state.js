@@ -101,6 +101,8 @@ export const state = {
   leftSheet: 0,          // active PDF page index for left pane
   rightSheet: 0,         // active PDF page index for right pane
   drawingPane: 'left',
+  activePane: 'left',
+  splitMode: false,
   dpr: 1,
   inkVisible: true,
   continuousScroll: true,

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bnGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1c202a"/>
+      <stop offset="100%" stop-color="#0d0f14"/>
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="256" height="256" rx="56" fill="url(#bnGrad)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+  
+  <!-- Subtle Grid Guide Lines -->
+  <line x1="72" y1="56" x2="148" y2="56" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4 4" opacity="0.35"/>
+  <line x1="72" y1="200" x2="162" y2="200" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4 4" opacity="0.35"/>
+  <line x1="72" y1="126" x2="152" y2="126" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4 4" opacity="0.35"/>
+
+  <!-- Stem Line -->
+  <line x1="72" y1="56" x2="72" y2="200" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- Top Bowl Cubic Bezier -->
+  <path d="M 72 56 C 148 56, 148 126, 72 126" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Bottom Bowl Cubic Bezier -->
+  <path d="M 72 126 C 162 126, 162 200, 72 200" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Control Point Tangent Handle Lines in Precision Azure #38bdf8 -->
+  <line x1="72" y1="56" x2="136" y2="44" stroke="#38bdf8" stroke-width="3" opacity="0.95"/>
+  <circle cx="136" cy="44" r="6" fill="#38bdf8"/>
+
+  <line x1="72" y1="126" x2="156" y2="126" stroke="#38bdf8" stroke-width="3" opacity="0.95"/>
+  <circle cx="156" cy="126" r="6" fill="#38bdf8"/>
+
+  <line x1="72" y1="200" x2="146" y2="212" stroke="#38bdf8" stroke-width="3" opacity="0.95"/>
+  <circle cx="146" cy="212" r="6" fill="#38bdf8"/>
+
+  <!-- Anchor Point Handles -->
+  <circle cx="72" cy="56" r="5" fill="#ffffff"/>
+  <circle cx="72" cy="126" r="5" fill="#ffffff"/>
+  <circle cx="72" cy="200" r="5" fill="#ffffff"/>
+</svg>

@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=InkWell
+Name=BezierNotes
 GenericName=PDF Ink Annotator
 Comment=Zero-latency vector ink and PDF annotator
 Exec="/mnt/Work/Own Programs/InkWell/Launch Inkwell.sh" %U

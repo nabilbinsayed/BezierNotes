@@ -813,8 +813,8 @@ function drawTransformedSelectionOverlay(ctx, viewport, pane, ib, mode, dx, dy, 
   }
 
   // Bounding rectangle
-  ctx.strokeStyle = '#6366f1';
-  ctx.fillStyle = 'rgba(99, 102, 241, 0.06)';
+  ctx.strokeStyle = '#2563eb';
+  ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
   ctx.lineWidth = 1.5;
   ctx.setLineDash([6, 4]);
   ctx.beginPath();
@@ -827,7 +827,7 @@ function drawTransformedSelectionOverlay(ctx, viewport, pane, ib, mode, dx, dy, 
   const rotHandleY = minY - rotStalkLen;
 
   ctx.save();
-  ctx.strokeStyle = '#6366f1';
+  ctx.strokeStyle = '#2563eb';
   ctx.lineWidth = 1.5;
   ctx.setLineDash([3, 3]);
   ctx.beginPath();
@@ -835,7 +835,7 @@ function drawTransformedSelectionOverlay(ctx, viewport, pane, ib, mode, dx, dy, 
   ctx.lineTo(midSx, rotHandleY);
   ctx.stroke();
 
-  ctx.fillStyle = '#6366f1';
+  ctx.fillStyle = '#2563eb';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 2;
   ctx.setLineDash([]);
@@ -873,7 +873,7 @@ function drawTransformedSelectionOverlay(ctx, viewport, pane, ib, mode, dx, dy, 
   ];
 
   ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#4f46e5';
+  ctx.strokeStyle = '#1d4ed8';
   ctx.lineWidth = 2;
   ctx.setLineDash([]);
 

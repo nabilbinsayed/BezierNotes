@@ -1,5 +1,7 @@
 # AGENTS.md — AI Agent Guidance for InkWell Repository
 
+Product name: BezierNotes (crate/folder names keep the `inkwell` prefix)
+
 Read this before making changes to the InkWell codebase.
 
 ## Subsystem Directory Map
@@ -26,7 +28,7 @@ Read this before making changes to the InkWell codebase.
 
 | Scope / Target | Command | Expected Outcome |
 |---|---|---|
-| Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, all 142 checks pass |
+| Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, all 150 checks pass |
 | Rust Workspace Tests | `cd inkwell; cargo test --workspace -- --test-threads=1` | exit 0, all 91 tests pass |
 | Rust Clippy | `cd inkwell; cargo clippy --all-targets` | zero warnings |
 | M0 Prototype Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass (prototype only) |

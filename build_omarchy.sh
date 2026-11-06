@@ -13,7 +13,7 @@ RED="\033[0;31m"
 RESET="\033[0m"
 
 echo -e "${BOLD}${CYAN}======================================================${RESET}"
-echo -e "${BOLD}${CYAN}   InkWell — Build & Setup for Arch Linux / Omarchy   ${RESET}"
+echo -e "${BOLD}${CYAN}  BezierNotes — Build & Setup for Arch Linux / Omarchy${RESET}"
 echo -e "${BOLD}${CYAN}======================================================${RESET}"
 
 # 1. Check system dependencies
@@ -108,10 +108,10 @@ fi
 echo -e "\n${BOLD}[6/6] Checking Hyprland window rules...${RESET}"
 HYPR_CONF="$HOME/.config/hypr/hyprland.lua"
 if [ -f "$HYPR_CONF" ]; then
-    if grep -q "dev\.inkwell\.app" "$HYPR_CONF" || grep -q "inkwell-app" "$HYPR_CONF"; then
+    if grep -q "dev\.inkwell\.app" "$HYPR_CONF" || grep -q "inkwell-app" "$HYPR_CONF" || grep -q "BezierNotes" "$HYPR_CONF"; then
         echo -e "${GREEN}✓ Hyprland opacity rule is already present in $HYPR_CONF.${RESET}"
     else
-        echo -e "\n-- InkWell PDF-Native Ink Annotator\no.window(\"^(Inkwell|inkwell-app|dev\\\\.inkwell\\\\.app)$\", { tag = \"-default-opacity\", opacity = \"1.0 1.0\" })" >> "$HYPR_CONF"
+        echo -e "\n-- BezierNotes PDF-Native Ink Annotator\no.window(\"^(BezierNotes|Inkwell|inkwell-app|dev\\\\.inkwell\\\\.app)$\", { tag = \"-default-opacity\", opacity = \"1.0 1.0\" })" >> "$HYPR_CONF"
         echo -e "${GREEN}✓ Added full-opacity window rule to $HYPR_CONF.${RESET}"
     fi
 else
@@ -119,7 +119,7 @@ else
 fi
 
 echo -e "\n${BOLD}${GREEN}======================================================${RESET}"
-echo -e "${BOLD}${GREEN}   InkWell Omarchy setup complete!                    ${RESET}"
-echo -e "${BOLD}${GREEN}   Launch via application menu or:                    ${RESET}"
+echo -e "${BOLD}${GREEN}  BezierNotes Omarchy setup complete!                 ${RESET}"
+echo -e "${BOLD}${GREEN}  Launch via application menu or:                     ${RESET}"
 echo -e "     ${BOLD}\"$SCRIPT_DIR/Launch Inkwell.sh\"${RESET}"
 echo -e "${BOLD}${GREEN}======================================================${RESET}"

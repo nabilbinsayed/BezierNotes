@@ -1,4 +1,4 @@
-# Inkwell — PDF-First Digital Notebook & Vector Annotator
+# BezierNotes — PDF-First Digital Notebook & Vector Annotator
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8?style=flat-square&logo=tauri)](https://tauri.app/)
 [![PDFium](https://img.shields.io/badge/PDFium-Native_Vector-red?style=flat-square)](https://pdfium.googlesource.com/pdfium/)
-[![License](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](#)
 
 <p align="center">
@@ -25,19 +25,19 @@ Modern note-taking software suffers from a fundamental flaw: **vendor lock-in an
 - Other tools rasterize vector PDFs into lossy, low-resolution bitmaps upon import, destroying text sharpness when you zoom in.
 - Mainstream PDF annotators frequently paywall basic pressure sensitivity, stroke smoothing, and tablet ergonomics.
 
-Inkwell is built on the **"File over App"** philosophy articulated by Steph Ango (*Kepano*, CEO of Obsidian): **your files belong to you, and the format must outlive the software.**
+BezierNotes is built on the **"File over App"** philosophy articulated by Steph Ango (*Kepano*, CEO of Obsidian): **your files belong to you, and the format must outlive the software.**
 
-> ### The Inkwell Contract
+> ### The BezierNotes Contract
 > 1. **The single source of truth is always a valid, standard PDF (ISO 32000).** No proprietary formats or binary database silos.
 > 2. **Never rasterize at import.** Vector documents remain 100% vector, rendered on demand per zoom level.
-> 3. **Universal interoperability.** Ink layers are saved as native vector geometry. Notes created in Inkwell open crisply in Adobe Acrobat, Apple Books, Google Chrome, Microsoft Edge, and mobile PDF readers.
+> 3. **Universal interoperability.** Ink layers are saved as native vector geometry. Notes created in BezierNotes open crisply in Adobe Acrobat, Apple Books, Google Chrome, Microsoft Edge, and mobile PDF readers.
 > 4. **Frictionless local-first sync.** Store your documents directly in Google Drive, OneDrive, Nextcloud, or Syncthing. No forced proprietary cloud accounts, no sync subscriptions.
 
 ---
 
 ## 🏛️ The Three-Layer PDF Architecture
 
-To achieve universal compatibility without sacrificing lossless digital editing, Inkwell writes three distinct layers simultaneously into every saved PDF:
+To achieve universal compatibility without sacrificing lossless digital editing, BezierNotes writes three distinct layers simultaneously into every saved PDF:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -57,7 +57,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 │   • Raw high-frequency sample stream (x, y, pressure, timestamps).     │
 │   • Varint-delta compressed and embedded inside an /EmbeddedFiles      │
 │     stream under private /Inkw_* catalog keys.                         │
-│   • Enables lossless stroke re-editing and manipulation in Inkwell.    │
+│   • Enables lossless stroke re-editing and manipulation in BezierNotes.│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -78,7 +78,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 - **On-Demand Vector Tile Rasterizer:** Powered by Google's PDFium engine for high-resolution level-of-detail (LOD) tile rendering with LRU cache eviction—text remains razor-sharp at any zoom level.
 - **New Digital Notebooks (`Ctrl+N`):** Instant creation of clean, vector-native digital notebooks with paper templates (blank, lined, grid).
 - **Dual-Pane Split View (`Ctrl+\`):** Side-by-side study workspace—read a textbook or lecture slides in the left pane while taking handwritten notes on the right, each with independent pan and zoom.
-- **Append-Only Incremental Save:** Inkwell preserves the original PDF bytes, appending updated xref tables and objects so base documents are never corrupted in-place.
+- **Append-Only Incremental Save:** BezierNotes preserves the original PDF bytes, appending updated xref tables and objects so base documents are never corrupted in-place.
 - **Temp-Dir WAL Crash Durability:** System temporary directory Write-Ahead Logging (`inkwell-wal`) commits every stroke with immediate `fsync`, effortlessly recovering unsaved work after crashes without thrashing cloud sync folders.
 - **Hierarchical Table of Contents & Bookmarks:** Recursive PDF outline extraction with collapsible tree navigation and direct page jumps.
 - **Instant Page Loading:** Page boxes are read with PDFium's fast `FPDF_GetPageSizeByIndexF` API (a 33-page textbook dropped from ~765 ms to ~1.6 ms of metadata work), clean PDFs skip sidecar parsing entirely, and the next two page bitmaps are prefetched in the background so scrolling does not wait on rasterization.
@@ -101,13 +101,13 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 
 ## 📥 Downloads & Releases
 
-Pre-compiled standalone packages and installers are available directly on the **[GitHub Releases](https://github.com/nabilbinsayed/InkrementalNotes/releases)** page.
+Pre-compiled standalone packages and installers are available directly on the **[GitHub Releases](https://github.com/nabilbinsayed/BezierNotes/releases)** page.
 
 | Platform | Package / Format | Instructions |
 |---|---|---|
-| **Windows** | **Installer (`.exe` / `.msi`)** | Run `Inkwell_<version>_x64-setup.exe` (or `.msi`) for desktop integration. |
+| **Windows** | **Installer (`.exe` / `.msi`)** | Run `BezierNotes_<version>_x64-setup.exe` (or `.msi`) for desktop integration. |
 | **Windows** | **Portable (`.zip`)** | Extract `inkwell-windows-x64-portable.zip` and run `Launch Inkwell.bat`. Zero installation required. |
-| **Linux (Universal)** | **AppImage (`.AppImage`)** | Download `Inkwell_<version>_amd64.AppImage`, run `chmod +x`, and launch. Compatible with Ubuntu, Fedora, Arch, openSUSE. |
+| **Linux (Universal)** | **AppImage (`.AppImage`)** | Download `BezierNotes_<version>_amd64.AppImage`, run `chmod +x`, and launch. Compatible with Ubuntu, Fedora, Arch, openSUSE. |
 | **Linux (Ubuntu / Debian)** | **Debian Package (`.deb`)** | Install via `sudo dpkg -i inkwell_*.deb`. |
 | **Linux (Fedora / RHEL)** | **RPM Package (`.rpm`)** | Install via `sudo dnf install ./inkwell-*.rpm`. |
 | **Linux (Portable)** | **Tarball (`.tar.gz`)** | Extract `inkwell-linux-x64-portable.tar.gz` and execute `./Launch Inkwell.sh`. |
@@ -181,7 +181,7 @@ InkWell/
 
 ## 🔍 Project Status & Technical Roadmap
 
-Inkwell is in active development with a verified baseline across all core subsystems. Here is an honest accounting of our current state and upcoming architectural milestones:
+BezierNotes is in active development with a verified baseline across all core subsystems. Here is an honest accounting of our current state and upcoming architectural milestones:
 
 ### ✅ Production-Ready & Verified
 - **Vector Inking Pipeline:** High-speed wet/dry canvas separation, sub-pixel pressure curves, and $C^1$ Bézier polygon generation. Long strokes freeze into incremental `Path2D` chunks with a cached prefix bitmap, so wet-ink cost stays flat regardless of stroke length.
@@ -199,7 +199,7 @@ Inkwell is in active development with a verified baseline across all core subsys
 1. **Parametric Vector Shapes:**
    - Upgrade shape tools from high-density stroke approximations into first-class parametric geometric entities with editable corner radiuses, endpoints, and stroke weights.
 2. **AcroForm Field Filling:**
-   - Existing form widgets render (and can be flattened) correctly, but InkWell does not yet let you type into them as a form-aware editor would.
+   - Existing form widgets render (and can be flattened) correctly, but BezierNotes does not yet let you type into them as a form-aware editor would.
 3. **Future Research (Infinite Canvas):**
    - The primary focus is rock-solid stability for the paginated digital notebook workflow. True unbounded spatial whiteboards with automatic PDF page tiling remain on the long-term exploratory roadmap.
 
@@ -236,7 +236,7 @@ cargo run
 
 ## 🧪 Verification & Test Suite
 
-Inkwell enforces strict quality assurance across its native systems code:
+BezierNotes enforces strict quality assurance across its native systems code:
 
 ```bash
 # 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests
@@ -256,4 +256,4 @@ py -3 test_app_smoke.py     # 126 desktop checks
 
 ## 📄 License
 
-Dual-licensed under the [MIT License](LICENSE-MIT) or [Apache 2.0 License](LICENSE-APACHE) at your option.
+This project is licensed under the [MIT License](LICENSE).

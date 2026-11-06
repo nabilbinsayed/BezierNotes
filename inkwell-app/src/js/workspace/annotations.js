@@ -81,7 +81,7 @@ function truncate(text, max = 90) {
 }
 
 function rgbToCss(rgb) {
-  if (!Array.isArray(rgb) || rgb.length < 3) return '#6366f1';
+  if (!Array.isArray(rgb) || rgb.length < 3) return '#2563eb';
   return `rgb(${rgb.map(v => Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 255)).join(',')})`;
 }
 
@@ -89,7 +89,7 @@ function safeCssColor(value) {
   const raw = String(value || '').trim();
   if (/^#[0-9a-f]{3,8}$/i.test(raw)) return raw;
   if (/^rgba?\([0-9., %]+\)$/i.test(raw)) return raw;
-  return '#6366f1';
+  return '#2563eb';
 }
 
 // ---- Aggregation ------------------------------------------------------------
@@ -172,7 +172,7 @@ function collectAllAnnotations() {
       page: clampPage(img.sheet),
       title: meta.title,
       snippet: truncate(img.label || '') || `${Math.round(img.width || 0)} × ${Math.round(img.height || 0)} pt`,
-      color: '#8b5cf6',
+      color: '#3b82f6',
       createdAt: Number(img.createdAt || 0),
       order: 200000 + index,
       bbox: { x0: img.x || 0, y0: img.y || 0, x1: (img.x || 0) + (img.width || 0), y1: (img.y || 0) + (img.height || 0) },

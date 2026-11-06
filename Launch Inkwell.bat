@@ -1,5 +1,5 @@
 @echo off
-title Inkwell PDF Annotator
+title BezierNotes PDF Annotator
 set "PATH=%~dp0;%~dp0bin;%PATH%"
 if exist "%~dp0pdfium.dll" (
     set "PDFIUM_DLL_DIR=%~dp0"
@@ -26,7 +26,7 @@ if exist "%~dp0inkwell-app.exe" (
 if defined BIN (
     start "" "%BIN%" %*
 ) else (
-    echo [InkWell] No compiled binary found.
+    echo [BezierNotes] No compiled binary found.
     echo Please build the application with:
     echo   cd inkwell-app\src-tauri ^&^& cargo build --release
     echo or

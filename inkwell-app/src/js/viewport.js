@@ -206,6 +206,9 @@ class ViewportManager {
       this.rightPanX = this.panX + bounds.x;
       this.rightPanY = this.panY;
     }
+    if (typeof window !== 'undefined' && window.state) {
+      window.state.splitMode = this.splitMode;
+    }
     // toggleSplitMode is a discrete UI action — fire onChange immediately (not RAF-coalesced)
     if (this.onChange) this.onChange();
     return this.splitMode;
@@ -421,6 +424,7 @@ class ViewportManager {
       this.activePane = pane;
       if (typeof window !== 'undefined' && window.state) {
         window.state.activePane = pane;
+        window.state.drawingPane = pane;
       }
 
       // NOTE [UNSOLVED]: On Windows WebView2, precision touchpad pinch gestures are
@@ -517,6 +521,7 @@ class ViewportManager {
       this.activePane = pane;
       if (typeof window !== 'undefined' && window.state) {
         window.state.activePane = pane;
+        window.state.drawingPane = pane;
       }
 
       if (e.pointerType === 'pen') {

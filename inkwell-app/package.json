@@ -2,6 +2,7 @@
   "name": "inkwell-app",
   "version": "0.2.0",
   "description": "Desktop host for InkWell PDF-native ink annotator",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/@tauri-apps/cli/tauri.js dev",

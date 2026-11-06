@@ -426,37 +426,44 @@ function bindUndoRedoButtons() {
 function bindZoomControls() {
   $('btnZoomIn') && $('btnZoomIn').addEventListener('click', () => {
     if (_viewport) {
-      _viewport.zoomIn([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
-      emit('zoomChanged', { zoom: _viewport.zoom });
+      const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
+      const bounds = _viewport.getPaneBounds ? _viewport.getPaneBounds(pane) : { x: 0, y: 0, width: _viewport.stageW, height: _viewport.stageH };
+      _viewport.zoomIn([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
+      emit('zoomChanged', { zoom: (pane === 'right' && _viewport.splitMode) ? _viewport.rightZoom : _viewport.zoom, pane });
     }
   });
 
   $('btnZoomOut') && $('btnZoomOut').addEventListener('click', () => {
     if (_viewport) {
-      _viewport.zoomOut([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
-      emit('zoomChanged', { zoom: _viewport.zoom });
+      const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
+      const bounds = _viewport.getPaneBounds ? _viewport.getPaneBounds(pane) : { x: 0, y: 0, width: _viewport.stageW, height: _viewport.stageH };
+      _viewport.zoomOut([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
+      emit('zoomChanged', { zoom: (pane === 'right' && _viewport.splitMode) ? _viewport.rightZoom : _viewport.zoom, pane });
     }
   });
 
   $('btnZoomFit') && $('btnZoomFit').addEventListener('click', () => {
-    if (_viewport && state.pageInfos && state.pageInfos[0]) {
-      const pi = state.pageInfos[0];
+    if (_viewport && state.pageInfos && state.pageInfos.length) {
+      const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
+      const curSheet = (pane === 'right' && _viewport.splitMode) ? (state.rightSheet || 0) : (state.leftSheet || 0);
+      const pi = state.pageInfos[curSheet] || state.pageInfos[0];
       const r = _viewport.stageRect || { width: 800, height: 600 };
-      const availW = Math.max(100, r.width - 48);
-      const availH = Math.max(100, r.height - 48);
+      const bounds = _viewport.getPaneBounds ? _viewport.getPaneBounds(pane) : { width: r.width, height: r.height };
+      const availW = Math.max(100, bounds.width - 48);
+      const availH = Math.max(100, bounds.height - 48);
       const pageW = pi.width_pt || 595.0;
       const pageH = pi.height_pt || 842.0;
       const pageZoom = Math.min(availW / pageW, availH / pageH);
       const widthZoom = availW / pageW;
 
-      const pane = _viewport.activePane || 'left';
+      const currentZoom = (pane === 'right' && _viewport.splitMode) ? _viewport.rightZoom : _viewport.zoom;
       // Toggle to fitWidth if already in fitPage, allowing widescreen displays to fill the page
-      if (Math.abs(_viewport.zoom - pageZoom) < 0.05 && widthZoom > pageZoom * 1.1) {
+      if (Math.abs(currentZoom - pageZoom) < 0.05 && widthZoom > pageZoom * 1.1) {
         _viewport.fitWidth(pageW, pane);
       } else {
         _viewport.fitPage(pageW, pageH, pane);
       }
-      emit('zoomChanged', { zoom: _viewport.zoom });
+      emit('zoomChanged', { zoom: (pane === 'right' && _viewport.splitMode) ? _viewport.rightZoom : _viewport.zoom, pane });
     }
   });
 

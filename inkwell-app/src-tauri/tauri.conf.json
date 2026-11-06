@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Inkwell",
+  "productName": "BezierNotes",
   "version": "0.2.0",
   "identifier": "dev.inkwell.app",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Inkwell — PDF-Native Ink Annotator",
+        "title": "BezierNotes — PDF-Native Ink Annotator",
         "width": 1280,
         "height": 800,
         "minWidth": 460,

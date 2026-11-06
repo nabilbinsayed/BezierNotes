@@ -416,6 +416,10 @@ pub fn ribbon_outline(stroke: &Stroke, cap_steps: usize) -> Vec<(f64, f64)> {
     if pts.len() == 1 {
         return circle(pts[0].x, pts[0].y, stroke.brush.width_for(pts[0].p) / 2.0, cap_steps * 4);
     }
+    if pts.len() == 2 && stroke.kind == ToolKind::Highlighter {
+        let (left, right) = ribbon_edges(stroke);
+        return vec![left[0], left[1], right[1], right[0]];
+    }
     if let Some(([x0, y0, x1, y1], p)) = is_axis_aligned_rect(pts) {
         let hw = stroke.brush.width_for(p) / 2.0;
         return vec![
@@ -628,6 +632,17 @@ pub fn ribbon_path(s: &Stroke, cap_steps: usize) -> Vec<PathCmd> {
         out.extend(polygon_to_cubics(&poly).into_iter().map(PathCmd::CurveTo));
         out.push(PathCmd::Close);
         return out;
+    }
+
+    if pts.len() == 2 && s.kind == ToolKind::Highlighter {
+        let (left, right) = ribbon_edges(s);
+        return vec![
+            PathCmd::MoveTo(left[0]),
+            PathCmd::LineTo(left[1]),
+            PathCmd::LineTo(right[1]),
+            PathCmd::LineTo(right[0]),
+            PathCmd::Close,
+        ];
     }
 
     if let Some(([x0, y0, x1, y1], p)) = is_axis_aligned_rect(pts) {

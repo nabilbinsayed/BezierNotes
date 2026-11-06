@@ -163,8 +163,8 @@ export function drawSelectionOverlay(ctx, state, viewport, dpr, pane = 'left') {
     const midSy = (minY + maxY) / 2;
 
     // Bounding rectangle
-    ctx.strokeStyle = '#6366f1';
-    ctx.fillStyle = 'rgba(99, 102, 241, 0.06)';
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
@@ -177,7 +177,7 @@ export function drawSelectionOverlay(ctx, state, viewport, dpr, pane = 'left') {
     const rotHandleY = minY - rotStalkLen;
 
     ctx.save();
-    ctx.strokeStyle = '#6366f1';
+    ctx.strokeStyle = '#2563eb';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
@@ -185,7 +185,7 @@ export function drawSelectionOverlay(ctx, state, viewport, dpr, pane = 'left') {
     ctx.lineTo(midSx, rotHandleY);
     ctx.stroke();
 
-    ctx.fillStyle = '#6366f1';
+    ctx.fillStyle = '#2563eb';
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.setLineDash([]);
@@ -224,7 +224,7 @@ export function drawSelectionOverlay(ctx, state, viewport, dpr, pane = 'left') {
     ];
 
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#4f46e5';
+    ctx.strokeStyle = '#1d4ed8';
     ctx.lineWidth = 2;
     ctx.setLineDash([]);
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Inkwell — PDF-Native Ink Annotator</title>
+<title>BezierNotes — PDF-Native Ink Annotator</title>
 <meta name="description" content="Pressure-sensitive PDF annotation with ink that lives inside the PDF. Free and open source.">
 <link rel="stylesheet" href="styles.css">
 <script>
@@ -43,8 +43,8 @@
   <!-- 1. Left Navigation Rail (Pinned Bar) -->
   <aside id="navRail" aria-label="Main Navigation Rail">
     <div class="rail-top">
-      <div id="railLogo" class="rail-logo-btn" title="Inkwell" aria-label="Inkwell Logo">
-        <span class="logo-icon">Ink</span>
+      <div id="railLogo" class="rail-logo-btn" title="BezierNotes" aria-label="BezierNotes Logo">
+        <img src="assets/logo.svg" alt="BezierNotes" width="28" height="28">
         <span class="status-dot green"></span>
       </div>
 
@@ -375,12 +375,18 @@
             <button id="btnLeftPanePrev" class="nav-cluster-btn mini" title="Previous page (left pane)">‹</button>
             <span id="leftPanePageNum" class="pane-page-num">1</span>
             <button id="btnLeftPaneNext" class="nav-cluster-btn mini" title="Next page (left pane)">›</button>
+            <button id="btnLeftZoomOut" class="nav-cluster-btn mini" title="Zoom out (left pane)" aria-label="Zoom out left pane">−</button>
+            <button id="btnLeftZoomIn" class="nav-cluster-btn mini" title="Zoom in (left pane)" aria-label="Zoom in left pane">+</button>
+            <button id="btnLeftZoomFit" class="nav-cluster-btn mini" title="Fit page (left pane)" aria-label="Fit left pane">Fit</button>
           </div>
           <div class="pane-nav-subcluster">
             <span class="pane-nav-tag">Right</span>
             <button id="btnRightPanePrev" class="nav-cluster-btn mini" title="Previous page (right pane)">‹</button>
             <span id="rightPanePageNum" class="pane-page-num">2</span>
             <button id="btnRightPaneNext" class="nav-cluster-btn mini" title="Next page (right pane)">›</button>
+            <button id="btnRightZoomOut" class="nav-cluster-btn mini" title="Zoom out (right pane)" aria-label="Zoom out right pane">−</button>
+            <button id="btnRightZoomIn" class="nav-cluster-btn mini" title="Zoom in (right pane)" aria-label="Zoom in right pane">+</button>
+            <button id="btnRightZoomFit" class="nav-cluster-btn mini" title="Fit page (right pane)" aria-label="Fit right pane">Fit</button>
           </div>
         </div>
       </div>
@@ -425,10 +431,10 @@
       <div id="welcomeDropzone" class="welcome-dropzone hidden">
         <div class="welcome-card">
           <div class="welcome-brand-badge">
-            <div class="welcome-icon">🖋️</div>
-            <span class="welcome-version-tag">InkWell Studio</span>
+            <img src="assets/logo.svg" alt="BezierNotes" width="28" height="28">
+            <span class="welcome-version-tag">BezierNotes Studio</span>
           </div>
-          <h2>Welcome to InkWell</h2>
+          <h2>Welcome to BezierNotes</h2>
           <p>High-fidelity vector PDF annotation, ultra-low latency stylus inking, and infinite digital whiteboarding.</p>
           <div class="welcome-buttons-row">
             <button id="btnWelcomeOpen" class="btn-primary-accent btn-hero" aria-label="Open PDF Document">
@@ -735,6 +741,8 @@
       <canvas id="dry"></canvas>
       <canvas id="wet" class="tool-pen"></canvas>
       <div id="splitDivider" class="split-divider hidden" role="separator" aria-orientation="vertical" aria-label="Resize split panes" tabindex="0"></div>
+      <div id="paneHighlightLeft" class="pane-highlight hidden"></div>
+      <div id="paneHighlightRight" class="pane-highlight hidden"></div>
 
       <!-- 4. Bottom Floating Inking & Annotation Dock -->
       <div id="floatingDock" class="floating-dock" aria-label="Annotation Dock">
@@ -942,7 +950,7 @@
         <label class="setting-toggle-row export-flatten-row" for="exportFlattenCheckbox">
           <div class="toggle-text">
             <span class="setting-title">Flatten annotations (read-only)</span>
-            <span class="setting-desc">Drops InkWell's editable sidecar so the copy keeps standard vector annotations but cannot be re-edited</span>
+            <span class="setting-desc">Drops BezierNotes's editable sidecar so the copy keeps standard vector annotations but cannot be re-edited</span>
           </div>
           <div class="custom-toggle">
             <input type="checkbox" id="exportFlattenCheckbox">
@@ -1082,7 +1090,7 @@
     </div>
   </div>
   <div id="radialLabelBadge" class="radial-label-badge">
-    <span id="radialLabel">Inkwell</span>
+    <span id="radialLabel">BezierNotes</span>
   </div>
   <button class="radial-item" data-tool="pen" style="--angle: 0deg;" title="Pen (P)" aria-label="Pen tool">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><circle cx="11" cy="11" r="2" fill="#ef4444"/></svg>
@@ -1105,7 +1113,7 @@
     <span class="tip">Lasso</span>
   </button>
   <button class="radial-item" data-action="undo" style="--angle: 240deg;" title="Undo (Ctrl+Z)" aria-label="Undo">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
     <span class="radial-shortcut">Z</span>
     <span class="tip">Undo</span>
   </button>
@@ -1359,7 +1367,7 @@
         <div class="settings-window-icon">⚙️</div>
         <div class="settings-window-titles">
           <h3 class="settings-window-title">Preferences</h3>
-          <span class="settings-window-subtitle">Inkwell Studio Configuration</span>
+          <span class="settings-window-subtitle">BezierNotes Studio Configuration</span>
         </div>
       </div>
       <button id="btnCloseSettingsModal" class="settings-close-btn" title="Close (Esc)" aria-label="Close settings">✕</button>
@@ -1588,7 +1596,7 @@
           <div class="settings-card" style="margin-top: 14px;">
             <div class="setting-toggle-row">
               <div class="toggle-text">
-                <span class="setting-title">Inkwell Desktop</span>
+                <span class="setting-title">BezierNotes Desktop</span>
                 <span class="setting-desc">Version 0.2.0 • Pure Rust Core + Tauri v2 Desktop Host</span>
               </div>
             </div>

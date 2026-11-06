@@ -1,5 +1,7 @@
 # Project: InkWell Full Optimization, Tool Repair & Cross-Platform Stability
 
+Product name: BezierNotes (crate/folder names keep the `inkwell` prefix)
+
 ## Architecture
 InkWell is a high-performance, low-latency, PDF-native annotator and digital ink workspace.
 The architecture is partitioned into:

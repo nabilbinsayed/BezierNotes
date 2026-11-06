@@ -678,8 +678,9 @@ function registerCoreCommands() {
     category: 'Navigation',
     shortcut: ['PageDown', 'ArrowRight', ']'],
     execute: () => {
-      const curSheet = state.drawingPane === 'right' ? state.rightSheet : state.leftSheet;
-      navigation.goToPage(curSheet + 1, state.drawingPane || 'left', _viewport);
+      const isRight = _viewport && _viewport.splitMode && (state.drawingPane === 'right');
+      const curSheet = isRight ? (state.rightSheet || 0) : (state.leftSheet || 0);
+      navigation.goToPage(curSheet + 1, isRight ? 'right' : 'left', _viewport);
     },
   });
 
@@ -689,8 +690,9 @@ function registerCoreCommands() {
     category: 'Navigation',
     shortcut: ['PageUp', 'ArrowLeft', '['],
     execute: () => {
-      const curSheet = state.drawingPane === 'right' ? state.rightSheet : state.leftSheet;
-      navigation.goToPage(curSheet - 1, state.drawingPane || 'left', _viewport);
+      const isRight = _viewport && _viewport.splitMode && (state.drawingPane === 'right');
+      const curSheet = isRight ? (state.rightSheet || 0) : (state.leftSheet || 0);
+      navigation.goToPage(curSheet - 1, isRight ? 'right' : 'left', _viewport);
     },
   });
 
@@ -726,12 +728,44 @@ function registerCoreCommands() {
     id: 'view.toggleSplit',
     title: 'Toggle Split View',
     category: 'View',
-    shortcut: 'Ctrl+\\',
+    shortcut: ['Ctrl+\\', 'Alt+S'],
     execute: () => {
       if (_viewport) {
+        const entering = !_viewport.splitMode;
+        let targetRightSheet = state.rightSheet || 0;
+        if (entering) {
+          const n = (state.pageInfos && state.pageInfos.length) || 1;
+          targetRightSheet = Math.min(n - 1, (state.leftSheet || 0) + 1);
+          state.rightSheet = targetRightSheet;
+        } else {
+          state.drawingPane = 'left';
+        }
         _viewport.toggleSplitMode();
-        if (_viewport.splitMode && typeof navigation !== 'undefined' && navigation.fitPageInPanes) {
-          navigation.fitPageInPanes(_viewport, compositor.getStageRect(), state.leftSheet || 0, state.rightSheet || 0);
+        state.splitMode = _viewport.splitMode;
+        if (entering) {
+          state.rightSheet = targetRightSheet;
+        }
+        compositor.updateStageRect();
+        const stageR = compositor.getStageRect();
+        if (typeof navigation !== 'undefined' && navigation.fitPageInPanes) {
+          if (_viewport.splitMode) {
+            navigation.fitPageInPanes(
+              _viewport,
+              stageR,
+              state.pageInfos ? state.pageInfos[state.leftSheet || 0] : null,
+              state.pageInfos ? state.pageInfos[targetRightSheet] : null
+            );
+          } else {
+            navigation.fitPageInPanes(
+              _viewport,
+              stageR,
+              state.pageInfos ? state.pageInfos[state.leftSheet || 0] : null,
+              null
+            );
+          }
+        }
+        if (typeof navigation !== 'undefined' && navigation.syncActivePagesFromViewport) {
+          navigation.syncActivePagesFromViewport(_viewport);
         }
         $('btnRailSplit') && $('btnRailSplit').classList.toggle('active', _viewport.splitMode);
         $('btnZoomSplit') && $('btnZoomSplit').classList.toggle('active', _viewport.splitMode);
@@ -753,6 +787,7 @@ function registerCoreCommands() {
         if (leftEl) leftEl.textContent = `${(state.leftSheet || 0) + 1}`;
         const rightEl = $('rightPanePageNum');
         if (rightEl) rightEl.textContent = `${(state.rightSheet || 0) + 1}`;
+        updatePaneHighlights();
         compositor.scheduleRedrawTiles();
         compositor.redrawAll();
       }
@@ -782,7 +817,7 @@ function registerCoreCommands() {
     shortcut: ['Ctrl+=', 'Ctrl+Shift+=', 'Ctrl++'],
     execute: () => {
       if (_viewport) {
-        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
         const bounds = compositor.paneBounds(pane);
         _viewport.zoomIn([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
@@ -797,7 +832,7 @@ function registerCoreCommands() {
     shortcut: 'Ctrl+-',
     execute: () => {
       if (_viewport) {
-        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
+        const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
         const bounds = compositor.paneBounds(pane);
         _viewport.zoomOut([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
@@ -811,9 +846,11 @@ function registerCoreCommands() {
     category: 'View',
     shortcut: 'Ctrl+0',
     execute: () => {
-      if (_viewport && state.pageInfos && state.pageInfos[0]) {
-        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
-        _viewport.fitPage(state.pageInfos[0].width_pt, state.pageInfos[0].height_pt, pane);
+      if (_viewport && state.pageInfos && state.pageInfos.length) {
+        const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
+        const curSheet = (pane === 'right' && _viewport.splitMode) ? (state.rightSheet || 0) : (state.leftSheet || 0);
+        const pi = state.pageInfos[curSheet] || state.pageInfos[0];
+        _viewport.fitPage(pi.width_pt, pi.height_pt, pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
@@ -825,9 +862,11 @@ function registerCoreCommands() {
     category: 'View',
     shortcut: 'Ctrl+9',
     execute: () => {
-      if (_viewport && state.pageInfos && state.pageInfos[0]) {
-        const pane = (_viewport.splitMode && _viewport.activePane) ? _viewport.activePane : 'left';
-        _viewport.fitWidth(state.pageInfos[0].width_pt, pane);
+      if (_viewport && state.pageInfos && state.pageInfos.length) {
+        const pane = (_viewport.splitMode && (state.drawingPane || _viewport.activePane)) ? (state.drawingPane || _viewport.activePane) : 'left';
+        const curSheet = (pane === 'right' && _viewport.splitMode) ? (state.rightSheet || 0) : (state.leftSheet || 0);
+        const pi = state.pageInfos[curSheet] || state.pageInfos[0];
+        _viewport.fitWidth(pi.width_pt, pane);
         if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
       }
     },
@@ -1117,6 +1156,40 @@ function bindAllUIEvents() {
   $('btnSplit') && $('btnSplit').addEventListener('click', onSplitToggle);
   $('btnZoomSplit') && $('btnZoomSplit').addEventListener('click', onSplitToggle);
 
+  function updatePaneHighlights() {
+    const hlLeft = $('paneHighlightLeft');
+    const hlRight = $('paneHighlightRight');
+    if (!hlLeft || !hlRight) return;
+    if (!_viewport || !_viewport.splitMode) {
+      hlLeft.classList.add('hidden');
+      hlRight.classList.add('hidden');
+      hlLeft.classList.remove('pane-active');
+      hlRight.classList.remove('pane-active');
+      return;
+    }
+    hlLeft.classList.remove('hidden');
+    hlRight.classList.remove('hidden');
+    const ratio = _viewport.splitRatio || 0.5;
+    hlLeft.style.left = '0%';
+    hlLeft.style.width = `${(ratio * 100).toFixed(2)}%`;
+    hlRight.style.left = `${(ratio * 100).toFixed(2)}%`;
+    hlRight.style.width = `${((1 - ratio) * 100).toFixed(2)}%`;
+
+    const active = state.drawingPane || 'left';
+    hlLeft.classList.toggle('pane-active', active === 'left');
+    hlRight.classList.toggle('pane-active', active === 'right');
+
+    const cluster = $('splitPageNavCluster');
+    if (cluster) {
+      const subclusters = cluster.querySelectorAll('.pane-nav-subcluster');
+      if (subclusters.length >= 2) {
+        subclusters[0].classList.toggle('active', active === 'left');
+        subclusters[1].classList.toggle('active', active === 'right');
+      }
+    }
+  }
+  window.updatePaneHighlights = updatePaneHighlights;
+
   // Split Divider Dragging and Double-Click Reset
   const splitDivider = $('splitDivider');
   if (splitDivider) {
@@ -1134,6 +1207,7 @@ function bindAllUIEvents() {
       const ratio = Math.max(0.2, Math.min(0.8, relX / totalW));
       _viewport.splitRatio = ratio;
       splitDivider.style.left = `${(ratio * 100).toFixed(2)}%`;
+      updatePaneHighlights();
       compositor.scheduleRedrawTiles();
       compositor.redrawAll();
     });
@@ -1149,6 +1223,7 @@ function bindAllUIEvents() {
       if (!_viewport) return;
       _viewport.splitRatio = 0.5;
       splitDivider.style.left = '50%';
+      updatePaneHighlights();
       compositor.scheduleRedrawTiles();
       compositor.redrawAll();
     });
@@ -1179,6 +1254,89 @@ function bindAllUIEvents() {
     const cur = _viewport ? _viewport.getActivePageInView('right') : 0;
     navigation.goToPage(cur + 1, 'right', _viewport);
   });
+
+  // Dual-Pane Cluster Per-Pane Zoom Controls
+  $('btnLeftZoomOut') && $('btnLeftZoomOut').addEventListener('click', () => {
+    if (_viewport) {
+      const bounds = compositor.paneBounds('left');
+      _viewport.zoomOut([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], 'left');
+      emit('zoomChanged', { zoom: _viewport.zoom, pane: 'left' });
+    }
+  });
+  $('btnLeftZoomIn') && $('btnLeftZoomIn').addEventListener('click', () => {
+    if (_viewport) {
+      const bounds = compositor.paneBounds('left');
+      _viewport.zoomIn([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], 'left');
+      emit('zoomChanged', { zoom: _viewport.zoom, pane: 'left' });
+    }
+  });
+  $('btnLeftZoomFit') && $('btnLeftZoomFit').addEventListener('click', () => {
+    if (_viewport) {
+      compositor.updateStageRect();
+      navigation.fitPageInPanes(
+        _viewport,
+        compositor.getStageRect(),
+        state.pageInfos ? state.pageInfos[state.leftSheet || 0] : null,
+        _viewport.splitMode && state.pageInfos ? state.pageInfos[state.rightSheet || 0] : null,
+        'left'
+      );
+      emit('zoomChanged', { zoom: _viewport.zoom, pane: 'left' });
+    }
+  });
+
+  $('btnRightZoomOut') && $('btnRightZoomOut').addEventListener('click', () => {
+    if (_viewport) {
+      const bounds = compositor.paneBounds('right');
+      _viewport.zoomOut([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], 'right');
+      emit('zoomChanged', { zoom: _viewport.rightZoom, pane: 'right' });
+    }
+  });
+
+  $('btnRightZoomIn') && $('btnRightZoomIn').addEventListener('click', () => {
+    if (_viewport) {
+      const bounds = compositor.paneBounds('right');
+      _viewport.zoomIn([bounds.x + bounds.width / 2, bounds.y + bounds.height / 2], 'right');
+      emit('zoomChanged', { zoom: _viewport.rightZoom, pane: 'right' });
+    }
+  });
+
+  $('btnRightZoomFit') && $('btnRightZoomFit').addEventListener('click', () => {
+    if (_viewport) {
+      compositor.updateStageRect();
+      navigation.fitPageInPanes(
+        _viewport,
+        compositor.getStageRect(),
+        state.pageInfos ? state.pageInfos[state.leftSheet || 0] : null,
+        state.pageInfos ? state.pageInfos[state.rightSheet || 0] : null,
+        'right'
+      );
+      emit('zoomChanged', { zoom: _viewport.rightZoom, pane: 'right' });
+    }
+  });
+
+  const splitClusterEl = $('splitPageNavCluster');
+  if (splitClusterEl) {
+    const subclusters = splitClusterEl.querySelectorAll('.pane-nav-subcluster');
+    if (subclusters[0]) {
+      subclusters[0].addEventListener('click', e => {
+        if (e.target.closest('button')) return;
+        state.activePane = 'left';
+        state.drawingPane = 'left';
+        if (_viewport) _viewport.activePane = 'left';
+        emit('activePaneChanged', { pane: 'left' });
+      });
+    }
+    if (subclusters[1]) {
+      subclusters[1].addEventListener('click', e => {
+        if (e.target.closest('button')) return;
+        state.activePane = 'right';
+        state.drawingPane = 'right';
+        if (_viewport) _viewport.activePane = 'right';
+        emit('activePaneChanged', { pane: 'right' });
+      });
+    }
+  }
+
   $('btnScrollTop') && $('btnScrollTop').addEventListener('click', () => navigation.goToPage(0, 'left', _viewport));
 
   // Custom Zoom
@@ -1452,28 +1610,35 @@ function bindAllUIEvents() {
       let base_width = 2.0;
       let y = (y0 + y1) / 2;
 
+      let points = [];
       if (mode === 'highlight') {
         kind = 'highlighter';
         rgb = state.highlighterColor || [0.98, 0.88, 0.15];
-        base_width = lineH * 0.95;
+        base_width = lineH;
         y = (y0 + y1) / 2;
+        points = [
+          { x: x0, y, p: 0.8, w: base_width },
+          { x: x1, y, p: 0.8, w: base_width }
+        ];
       } else if (mode === 'underline') {
         kind = 'pen';
         rgb = state.penColor || [0.94, 0.27, 0.27];
-        base_width = Math.max(1.2, lineH * 0.08);
+        base_width = Math.max(1.5, lineH * 0.08);
         y = y1 - 1;
+        points = [
+          { x: x0, y, p: 0.8, w: base_width },
+          { x: x1, y, p: 0.8, w: base_width }
+        ];
       } else if (mode === 'strikethrough') {
         kind = 'pen';
         rgb = state.penColor || [0.94, 0.27, 0.27];
-        base_width = Math.max(1.2, lineH * 0.08);
+        base_width = Math.max(1.5, lineH * 0.08);
         y = (y0 + y1) / 2;
+        points = [
+          { x: x0, y, p: 0.8, w: base_width },
+          { x: x1, y, p: 0.8, w: base_width }
+        ];
       }
-
-      const points = [
-        { x: x0, y, p: 0.5 },
-        { x: (x0 + x1) / 2, y, p: 0.5 },
-        { x: x1, y, p: 0.5 }
-      ];
 
       const stroke = {
         id: `markup_${mode}_${timestamp}_${i}_${Math.random().toString(36).substring(2, 7)}`,
@@ -1730,9 +1895,12 @@ function attachPointerHandlers(wetCanvas) {
 
   function localXY(e) {
     const pane = compositor.paneForEvent(e);
-    state.activePane = pane;
-    state.drawingPane = pane;
-    if (_viewport) _viewport.activePane = pane;
+    if (state.activePane !== pane) {
+      state.activePane = pane;
+      state.drawingPane = pane;
+      if (_viewport) _viewport.activePane = pane;
+      emit('activePaneChanged', { pane });
+    }
     const stageEl = $('stage');
     const r = compositor.getStageRect() || (stageEl ? stageEl.getBoundingClientRect() : wetCanvas.getBoundingClientRect());
     const wx = _viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
@@ -1847,6 +2015,13 @@ function attachPointerHandlers(wetCanvas) {
   const stage = $('stage');
   if (stage) {
     stage.addEventListener('contextmenu', handleCanvasContextMenu);
+    stage.addEventListener('pointerdown', e => {
+      const pane = compositor.paneForEvent(e);
+      state.drawingPane = pane;
+      state.activePane = pane;
+      if (_viewport) _viewport.activePane = pane;
+      emit('activePaneChanged', { pane });
+    });
   }
 
   wetCanvas.addEventListener('pointerdown', e => {
@@ -2416,12 +2591,18 @@ window.addEventListener('DOMContentLoaded', async () => {
   attachKeyboardShortcuts();
   toolManager.initStylusIntegration();
 
-  window.addEventListener('resize', () => compositor.resize());
+  window.addEventListener('resize', () => {
+    compositor.resize();
+    updatePaneHighlights();
+  });
   window.addEventListener('scroll', () => compositor.updateStageRect(), { passive: true });
 
   const stageEl = $('stage');
   if (typeof ResizeObserver !== 'undefined' && stageEl) {
-    new ResizeObserver(() => compositor.resize()).observe(stageEl);
+    new ResizeObserver(() => {
+      compositor.resize();
+      updatePaneHighlights();
+    }).observe(stageEl);
   }
 
   // Passive state listeners
@@ -2453,6 +2634,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (totalDisplay) {
       totalDisplay.textContent = `${payload.totalPages || 1}`;
     }
+    if (payload.pane === 'right') {
+      const rightEl = $('rightPanePageNum');
+      if (rightEl) rightEl.textContent = `${payload.pageIndex + 1}`;
+    } else {
+      const leftEl = $('leftPanePageNum');
+      if (leftEl) leftEl.textContent = `${payload.pageIndex + 1}`;
+    }
     scrollbar.updateDocScrollbar(_viewport);
   });
   on('activePagesChanged', ({ left, right }) => {
@@ -2461,6 +2649,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (leftEl) leftEl.textContent = `${(left !== undefined ? left : 0) + 1}`;
     const rightEl = $('rightPanePageNum');
     if (rightEl) rightEl.textContent = `${(right !== undefined ? right : 0) + 1}`;
+    if (state.activeDrawer === 'thumbnails') {
+      drawers.updateThumbnailActiveCards();
+    }
+  });
+  on('activePaneChanged', () => {
+    updatePaneHighlights();
+    if (state.activeDrawer === 'thumbnails') {
+      drawers.updateThumbnailActiveCards();
+    }
   });
   on('zoomChanged', payload => {
     const el = $('zoomLevelDisplay');
