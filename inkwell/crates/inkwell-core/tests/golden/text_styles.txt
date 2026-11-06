@@ -1,0 +1,107 @@
+5 0 obj
+<< /Contents 9 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Parent 8 0 R
+/Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 0
+/Trans <<
+
+>>
+/Type /Page
+/Annots [11 0 R 13 0 R 15 0 R 17 0 R ] >>
+endobj
+
+6 0 obj
+<< /PageMode /UseNone
+/Pages 8 0 R
+/Type /Catalog
+/Names << /EmbeddedFiles << /Names [(inkwell.doc) 19 0 R] >> >>
+/AF [19 0 R]
+/Inkw_Doc 18 0 R
+/Inkw_Ver 1
+/Inkw_Hash <02edaa78c3ac2701a7670f7b8e7e63b3d38977ec686e8de3041adc0d11ffeec4>
+>>
+endobj
+
+10 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 200.000 40.000] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >> /Length <n> >>
+q
+BT
+/Helv 12.00 Tf
+0.125 0.125 0.251 rg
+1 0 0 1 0 23.80 Tm
+(Regular \\(with parens\\) \\\\ backslash) Tj
+ET
+Q
+endstream
+endobj
+
+11 0 obj
+<< /Type /Annot /Subtype /FreeText /F 4 /Rect [90 501.89 290 541.89] /T (Inkwell) /Contents (Regular \(with parens\) \\ backslash) /DA (/Helv 12.00 Tf 0.125 0.125 0.251 rg) /AP << /N 10 0 R >> /Inkw_Sid (txt_regular) >>
+endobj
+
+12 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 200.000 40.000] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >> /Length <n> >>
+q
+BT
+/HelvB 12.00 Tf
+0.125 0.125 0.251 rg
+1 0 0 1 0 23.80 Tm
+(Bold) Tj
+ET
+Q
+endstream
+endobj
+
+13 0 obj
+<< /Type /Annot /Subtype /FreeText /F 4 /Rect [90 501.89 290 541.89] /T (Inkwell) /Contents (Bold) /DA (/HelvB 12.00 Tf 0.125 0.125 0.251 rg) /AP << /N 12 0 R >> /Inkw_Sid (txt_bold) >>
+endobj
+
+14 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 200.000 40.000] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >> /Length <n> >>
+q
+BT
+/HelvI 12.00 Tf
+0.125 0.125 0.251 rg
+1 0 0 1 0 23.80 Tm
+(Italic) Tj
+ET
+Q
+endstream
+endobj
+
+15 0 obj
+<< /Type /Annot /Subtype /FreeText /F 4 /Rect [90 501.89 290 541.89] /T (Inkwell) /Contents (Italic) /DA (/HelvI 12.00 Tf 0.125 0.125 0.251 rg) /AP << /N 14 0 R >> /Inkw_Sid (txt_italic) >>
+endobj
+
+16 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 200.000 40.000] /Resources << /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >> /Length <n> >>
+q
+BT
+/HelvBI 12.00 Tf
+0.125 0.125 0.251 rg
+1 0 0 1 0 23.80 Tm
+(Bold italic) Tj
+ET
+Q
+endstream
+endobj
+
+17 0 obj
+<< /Type /Annot /Subtype /FreeText /F 4 /Rect [90 501.89 290 541.89] /T (Inkwell) /Contents (Bold italic) /DA (/HelvBI 12.00 Tf 0.125 0.125 0.251 rg) /AP << /N 16 0 R >> /Inkw_Sid (txt_bolditalic) >>
+endobj
+
+18 0 obj
+<< /Type /EmbeddedFile /Subtype /application#2Fx-inkwell /Params << /Size 985 >> /Filter /FlateDecode /Length <n> >>
+<sidecar 985 bytes sha256=02edaa78c3ac2701a7670f7b8e7e63b3d38977ec686e8de3041adc0d11ffeec4>
+endstream
+endobj
+
+19 0 obj
+<< /Type /Filespec /F (inkwell.doc) /UF (inkwell.doc) /Desc (Inkwell editable ink data \(pressure, layers, samples\)) /AFRelationship /Supplement /EF << /F 18 0 R >> >>
+endobj
+
+trailer
+<< /Size 20 /Root 6 0 R /Prev 2045 /Info 7 0 R /ID <masked> >>

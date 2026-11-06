@@ -45,7 +45,10 @@
 - Snapshot what's needed under the locks (`doc.clone()` or `Arc<Document>`, the `Arc<Vec<u8>>` base), drop the guards, run `write_document` + `finish` + `atomic_write` in `tauri::async_runtime::spawn_blocking`. Re-take locks only to publish results.
 - Guard against overlapping saves with a `save_generation: AtomicU64`. A save whose generation is stale must not overwrite `pdf_bytes`.
 
-### 5. Windows journal location
+### 5. Sweep orphaned save temp files
+Plan 087's torture loop shows that a kill during `atomic_write` leaves `.<name>.pdf.inkwell-tmp-<pid>-<n>` next to the document: 25 of 60 kills on a real disk. The document itself is always intact, but these siblings sit inside the user's sync folder and get uploaded. On open and after each successful save, delete siblings matching that exact pattern whose `<pid>` is not a live process. Add a `torture_save.sh` assertion that, after the next successful save, the orphan count is 0.
+
+### 6. Windows journal location
 - `wal_path_for` uses `%TEMP%` on Windows, which Storage Sense and cleanup tools purge. Move it to `%LOCALAPPDATA%\BezierNotes\wal\` (still outside sync folders, Non-Negotiable #4). Migrate an existing journal on first open.
 
 ## Verification

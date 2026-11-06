@@ -30,7 +30,7 @@ Two defects break the "original bytes are never touched" and "trivial cloud sync
 ## Design
 
 ### Part A: Read and write cross-reference streams (ISO 32000-1 §7.5.8)
-1. In `pdfobj.rs`, add an xref resolver that walks the `/Prev` chain and understands both classic `xref` tables and `/Type /XRef` streams (`/W`, `/Index`, Flate + PNG predictors 10–15), including hybrid files (`/XRefStm`).
+1. In `pdfobj.rs`, add an xref resolver that walks the `/Prev` chain and merges trailers. **Linearized files** currently fail with "trailer has no /Root" because `/Root` lives in the first-page trailer and only the last trailer is read (found by Plan 087's `linearized.pdf` fixture). The resolver must and understands both classic `xref` tables and `/Type /XRef` streams (`/W`, `/Index`, Flate + PNG predictors 10–15), including hybrid files (`/XRefStm`).
 2. Add object-stream support (`/Type /ObjStm`, `/N`, `/First`) to `find_object`, so the page tree, catalog and annots inside compressed object streams can be read. Replace the current byte-scan `find_object` with an offset table built once per open (also a speed win on large files).
 3. In `PdfFile::finish`, when the base's last section is an xref stream, emit the incremental section as an **xref stream** (one new `/Type /XRef` object with `/Prev`, `/Size`, `/Root`, `/Info`, `/ID`), never a classic table. A classic section chained after an xref stream is invalid for strict readers.
 4. Encrypted inputs: today `trailer_encrypt` is copied and new objects are written in plaintext. Either implement RC4/AES object encryption for appended objects using the base's `/Encrypt` dictionary (empty user password case), or refuse with a clear error. Never silently write unencrypted objects into an encrypted file.

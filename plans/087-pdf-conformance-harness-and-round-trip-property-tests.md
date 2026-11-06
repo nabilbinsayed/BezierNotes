@@ -6,7 +6,7 @@
 | **Effort** | M (~600 lines, mostly tests + CI) |
 | **Category** | Verification / File-Format Integrity |
 | **Depends on** | — |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-06; see Outcome) |
 
 ## Why
 
@@ -69,3 +69,24 @@ Expected: all green **except** known failures, which are recorded as `#[ignore =
 ## STOP Conditions
 - STOP if `qpdf` itself rejects one of the *input* fixtures. Fix the fixture, not the assertion.
 - STOP and report if the torture loop ever produces an unopenable file. That is a P0 data-loss bug and preempts the rest of the wave.
+
+## Outcome (2026-11-06)
+
+Landed:
+- `inkwell-pdf/tests/conformance.rs`: 7 fixtures (`fixtures/conformance/*` from `tools/gen_conformance_fixtures.sh`, plus `irs_w9.pdf` and `arxiv_adam.pdf`) saved the way `save_pdf` saves, two sessions each, with checks for qpdf, prefix, sidecar, PDFium reopen and bounded growth. Known defects go in a `KNOWN_FAILURES` ratchet, so unexpected failures *and* fixed-but-still-listed entries both fail.
+- `inkwell-core/tests/roundtrip_prop.rs`: proptest, 32 cases × 2 properties over 5-page documents (strokes, Unicode/escape-heavy text, images, templates, bookmarks); two save generations; `qpdf --check` per case when available.
+- `inkwell-core/tests/golden.rs` + `tests/golden/*.txt`: 6 snapshots (dot, two-point highlighter, axis rect, 700-pt scribble, text styles, non-ASCII text) with inflated streams, the sidecar as a hash, and `/ID` + `/Length` masked.
+- `inkwell-pdf/tests/render_diff.rs`: PDFium vs **Ghostscript** (MuPDF isn't packaged on the CI image) ink-mask agreement; 0.997–1.000 on 4 fixtures.
+- `inkwell-core/examples/save_loop.rs` + `scripts/torture_save.sh`: 200 kills → 0 unopenable. It must run on a real disk; on tmpfs no kill lands inside a write.
+- CI (Linux job): installs qpdf + ghostscript, `BEZIER_CONFORMANCE_STRICT=1`, torture 50 on PRs / 200 on main.
+
+Findings recorded as known failures (owned by Plan 088):
+- prefix lost on `xref_stream`, `objstm_multi_page`, `irs_w9` **and `linearized`** (new: `/Root` lives in the first-page trailer; `PdfFile::open` says "trailer has no /Root");
+- bounded growth fails on **every** fixture: session 2 doubles the appended bytes (e.g. `classic.pdf` 15.8 KB → 31.6 KB);
+- `encrypted_aes256`: qpdf reports undecryptable streams (we append plaintext objects) and an invalid trailer `/ID`.
+
+Other findings:
+- Torture: 25 of 60 kills on a real disk left `.notes.pdf.inkwell-tmp-*` siblings in the folder; added to Plan 090 §5.
+- Golden `non_ascii_text.txt` records the raw UTF-8 `Tj` bytes that Plan 089 replaces.
+
+Deferred (not done here): signed, PDF/A-2b, tagged and 1000-page fixtures; veraPDF. They are not needed until Plan 088 (signature preservation) and Plan 098 (release checklist); add them there.

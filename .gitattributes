@@ -1,0 +1,3 @@
+# Byte-exact test data: never rewrite line endings (Windows CI checkouts).
+*.pdf binary
+inkwell/crates/inkwell-core/tests/golden/*.txt -text

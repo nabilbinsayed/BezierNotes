@@ -171,10 +171,20 @@ jobs:
           pip install playwright pytest
           playwright install chromium
 
+      - name: Install PDF Conformance Tools (qpdf, Ghostscript)
+        run: sudo apt-get install -y qpdf ghostscript
+
       - name: Linux Cargo Tests & Clippy
+        env:
+          # Plan 087: qpdf, Ghostscript and PDFium are required, not skipped.
+          BEZIER_CONFORMANCE_STRICT: '1'
         run: |
           cargo test -p inkwell-core -p inkwell-pdf -- --test-threads=1
           cargo clippy -p inkwell-core -p inkwell-pdf --all-targets -- -D warnings
+
+      - name: Crash Torture (kill -9 mid-save)
+        # Full 200-kill run on main; a quicker 50 on pull requests.
+        run: scripts/torture_save.sh ${{ github.event_name == 'pull_request' && '50' || '200' }}
 
       - name: Linux Desktop App Smoke Suite
         working-directory: inkwell-app

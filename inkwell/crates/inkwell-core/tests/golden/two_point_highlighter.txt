@@ -1,0 +1,56 @@
+5 0 obj
+<< /Contents 9 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Parent 8 0 R
+/Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 0
+/Trans <<
+
+>>
+/Type /Page
+/Annots [11 0 R ] >>
+endobj
+
+6 0 obj
+<< /PageMode /UseNone
+/Pages 8 0 R
+/Type /Catalog
+/Names << /EmbeddedFiles << /Names [(inkwell.doc) 13 0 R] >> >>
+/AF [13 0 R]
+/Inkw_Doc 12 0 R
+/Inkw_Ver 1
+/Inkw_Hash <13f23617e8f78fd0fe67e81b1034a29f8dd0a6871bf1a63d1a8b6ed820d42ff1>
+>>
+endobj
+
+10 0 obj
+<< /Type /XObject /Subtype /Form /BBox [99 436.62 301 447.16] /Resources << /ExtGState << /GSn << /Type /ExtGState /BM /Normal /ca 1 >> /GSm << /Type /ExtGState /BM /Multiply /ca 0.42 >> >> >> /Filter /FlateDecode /Length <n> >>
+q
+/GSm gs
+0.100 0.200 0.600 rg
+100 437.62 m
+300 437.62 l
+300 446.16 l
+100 446.16 l
+h f Q
+endstream
+endobj
+
+11 0 obj
+<< /Type /Annot /Subtype /Ink /F 4 /Rect [99 436.62 301 447.16] /InkList [[100 441.89 300 441.89]] /C [0.100 0.200 0.600] /BS << /W 14.00 /S /S >> /T (Inkwell) /NM (00000000000000000000000000000002) /AP << /N 10 0 R >> /Inkw_Sid (00000000000000000000000000000002) /Inkw_N 1 >>
+endobj
+
+12 0 obj
+<< /Type /EmbeddedFile /Subtype /application#2Fx-inkwell /Params << /Size 373 >> /Filter /FlateDecode /Length <n> >>
+<sidecar 373 bytes sha256=13f23617e8f78fd0fe67e81b1034a29f8dd0a6871bf1a63d1a8b6ed820d42ff1>
+endstream
+endobj
+
+13 0 obj
+<< /Type /Filespec /F (inkwell.doc) /UF (inkwell.doc) /Desc (Inkwell editable ink data \(pressure, layers, samples\)) /AFRelationship /Supplement /EF << /F 12 0 R >> >>
+endobj
+
+trailer
+<< /Size 14 /Root 6 0 R /Prev 2045 /Info 7 0 R /ID <masked> >>

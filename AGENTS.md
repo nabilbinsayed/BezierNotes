@@ -29,6 +29,9 @@ Read this before making changes to the InkWell codebase.
 | Scope / Target | Command | Expected Outcome |
 |---|---|---|
 | Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, all 150 checks pass |
-| Rust Workspace Tests | `cd inkwell; cargo test --workspace -- --test-threads=1` | exit 0, all 91 tests pass |
+| Rust Workspace Tests | `cd inkwell; cargo test --workspace -- --test-threads=1` | exit 0, all 101 tests pass (incl. Plan 087 conformance, golden, round-trip property and render-diff suites) |
 | Rust Clippy | `cd inkwell; cargo clippy --all-targets` | zero warnings |
+| PDF Conformance (strict) | `cd inkwell; BEZIER_CONFORMANCE_STRICT=1 cargo test -p inkwell-pdf --test conformance --test render_diff` | exit 0; needs `qpdf`, `gs`, PDFium. Known defects live in `KNOWN_FAILURES` (a ratchet: delete an entry when its fix lands) |
+| Golden Snapshots | `cd inkwell; cargo test -p inkwell-core --test golden` | exit 0; after an intentional format change run with `UPDATE_GOLDEN=1` and review the diff |
+| Crash Torture | `scripts/torture_save.sh 200` | `0 unopenable` |
 | M0 Prototype Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass (prototype only) |

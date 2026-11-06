@@ -18,6 +18,8 @@ Thumbs.db
 
 # PDF test files and generated corpus (keep fixtures/lecture.pdf and MANIFEST.md)
 *.pdf
+# Test fixtures are committed on purpose (Plan 087 conformance corpus).
+!inkwell/fixtures/**/*.pdf
 !fixtures/lecture.pdf
 !**/fixtures/lecture.pdf
 
