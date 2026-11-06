@@ -2890,6 +2890,14 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (msg) toast.showToast('Could not save on exit: ' + msg, 'error');
       }
     });
+
+    // A damaged PDF had to be rewritten to save into it; say where the
+    // untouched original went.
+    window.__TAURI__.event.listen('pdf-repaired', (event) => {
+      const backup = String(event?.payload || '');
+      const name = backup.split(/[\\/]/).pop() || 'a backup copy';
+      toast.showToast(`This PDF was damaged and has been repaired on save. The original is kept as ${name}`, 'warning');
+    });
   }
 
   // Global compatibility bridges

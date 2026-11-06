@@ -11,28 +11,24 @@ pub enum NormaliseError {
     ParseFailed(PdfObjError),
 }
 
-/// Normalise a PDF into a form that `inkwell_core::pdfobj` can parse.
+/// Repair a PDF that `inkwell_core::pdfobj` cannot parse by re-serialising
+/// it through PDFium.
 ///
-/// Most real-world PDFs use cross-reference streams and object streams
-/// (PDF 1.5+). Our byte-level reader (`pdfobj`) handles only classic
-/// cross-reference tables. PDFium can decompress and re-serialise any
-/// PDF into that simpler form.
+/// Since Plan 088 our reader handles classic tables, xref streams, object
+/// streams and linearized files natively, so this runs only for genuinely
+/// damaged files (broken xref, bad offsets PDFium reconstructs). It rewrites
+/// the whole file, so callers must keep the original and tell the user.
 ///
-/// If the input already uses classic xref, this function returns it
-/// unchanged (avoiding a needless PDFium round-trip).
+/// If the input already parses, it is returned unchanged.
 pub fn normalise(pdfium: &Pdfium, input: &[u8]) -> Result<Vec<u8>, NormaliseError> {
     // 1. First try opening with our parser
     match PdfFile::open(input.to_vec()) {
         Ok(_) => {
-            debug!("PDF is already in classic xref format.");
+            debug!("PDF parses natively; no repair needed.");
             return Ok(input.to_vec());
         }
-        Err(PdfObjError::XrefStream) => {
-            debug!("PDF uses xref stream. Normalising with PDFium...");
-        }
         Err(e) => {
-            // Some other parsing error, might still be fixed by normalising
-            debug!("PDF parsing failed ({:?}). Normalising with PDFium...", e);
+            debug!("PDF parsing failed ({:?}). Repairing with PDFium...", e);
         }
     }
 

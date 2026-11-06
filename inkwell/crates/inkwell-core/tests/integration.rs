@@ -361,16 +361,13 @@ fn interop_layer_is_present_for_third_party_readers() {
 }
 
 #[test]
-fn xref_stream_pdfs_are_refused_not_corrupted() {
-    // A minimal PDF whose startxref points at an xref STREAM rather than a table.
+fn malformed_xref_streams_are_refused_not_corrupted() {
+    // startxref points at an xref stream with no /W and garbage data: real
+    // xref streams are supported (Plan 088), broken ones must still error.
     let mut fake = b"%PDF-1.7\n1 0 obj\n<< /Type /XRef /Size 2 /Root 2 0 R >>\nstream\nx\nendstream\nendobj\n".to_vec();
     let off = fake.len();
     fake.extend_from_slice(format!("startxref\n{off}\n%%EOF\n").as_bytes());
-    match PdfFile::open(fake) {
-        Err(inkwell_core::pdfobj::Error::XrefStream) => {}
-        Err(e) => panic!("wrong error: {e}"),
-        Ok(_) => panic!("must not silently accept an xref-stream PDF"),
-    }
+    assert!(PdfFile::open(fake).is_err(), "must not silently accept a malformed xref stream");
 }
 
 // ===========================================================================

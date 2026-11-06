@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::doc::{self, Document};
 use crate::ink::{ribbon_path, PathCmd, Stroke, ToolKind};
 use crate::pdfobj::{self as po, Error, Result};
+use crate::xref::ObjIndex;
 
 /// Number of strokes sharing one `/Ink` annotation. One annotation per stroke is
 /// spec-correct but a dense page then carries thousands of annotations, which
@@ -28,50 +29,46 @@ use crate::pdfobj::{self as po, Error, Result};
 pub const DEFAULT_GROUP: usize = 64;
 
 pub struct PdfFile {
-    base: Vec<u8>,
+    /// The input file, followed by objects materialised from object streams
+    /// (see `xref`). Only `view[..base_len]` is ever written back out.
+    view: Vec<u8>,
+    base_len: usize,
+    index: ObjIndex,
     next_id: u32,
     root_num: u32,
     trailer_id: Option<Vec<u8>>,
     trailer_info: Option<Vec<u8>>,
-    trailer_encrypt: Option<Vec<u8>>,
     prev_xref: usize,
+    /// The newest input section is an xref stream, so ours must be one too.
+    xref_stream: bool,
     pages: Vec<u32>,
     new_objs: BTreeMap<u32, Vec<u8>>,
 }
 
 impl PdfFile {
     pub fn open(bytes: Vec<u8>) -> Result<Self> {
-        let d = &bytes;
-        let prev_xref = po::last_startxref(d)?;
-
-        // Reject xref-stream PDFs loudly instead of corrupting them.
-        let at = po::skip_ws(d, prev_xref);
-        if d.get(at..at + 4) != Some(b"xref") {
-            return Err(Error::XrefStream);
+        let base_len = bytes.len();
+        let mut view = bytes;
+        let index = ObjIndex::build(&mut view)?;
+        let tr = index.trailer.clone();
+        // Appending plaintext objects to an encrypted file corrupts it for
+        // every other reader (qpdf: "error decoding stream data"). Refuse.
+        if tr.encrypt.is_some() {
+            return Err(Error::Encrypted);
         }
-
-        let tr = po::last_trailer_dict(d)?;
-        let root_num = po::dict_get(d, tr, "/Root")
-            .and_then(|r| po::as_ref_num(d, r))
-            .ok_or(Error::NoRoot)?;
-        let size = po::dict_get(d, tr, "/Size")
-            .and_then(|r| po::as_int(d, r))
-            .ok_or(Error::NoSize)?;
-        let trailer_id =
-            po::dict_get(d, tr, "/ID").map(|r| d[r.0..r.1].to_vec());
-        let trailer_info =
-            po::dict_get(d, tr, "/Info").map(|r| d[r.0..r.1].to_vec());
-        let trailer_encrypt =
-            po::dict_get(d, tr, "/Encrypt").map(|r| d[r.0..r.1].to_vec());
+        let root_num = tr.root.ok_or(Error::NoRoot)?;
+        let next_id = tr.size.max(index.max_obj.saturating_add(1));
 
         let mut f = Self {
-            base: bytes,
-            next_id: size as u32,
+            prev_xref: index.last_xref,
+            xref_stream: index.last_is_stream,
+            view,
+            base_len,
+            index,
+            next_id,
             root_num,
-            trailer_id,
-            trailer_info,
-            trailer_encrypt,
-            prev_xref,
+            trailer_id: tr.id,
+            trailer_info: tr.info,
             pages: Vec::new(),
             new_objs: BTreeMap::new(),
         };
@@ -86,14 +83,14 @@ impl PdfFile {
     // -- structure walk ----------------------------------------------------
 
     fn obj_dict(&self, num: u32) -> Result<(usize, usize)> {
-        let (bs, _) = po::find_object(&self.base, num).ok_or(Error::MissingObject(num))?;
-        po::dict_inner(&self.base, bs)
+        let (bs, _) = self.index.find(&self.view, num).ok_or(Error::MissingObject(num))?;
+        po::dict_inner(&self.view, bs)
     }
 
     fn collect_pages(&self) -> Result<Vec<u32>> {
         let cat = self.obj_dict(self.root_num)?;
-        let pages_ref = po::dict_get(&self.base, cat, "/Pages")
-            .and_then(|r| po::as_ref_num(&self.base, r))
+        let pages_ref = po::dict_get(&self.view, cat, "/Pages")
+            .and_then(|r| po::as_ref_num(&self.view, r))
             .ok_or(Error::Malformed("catalog has no /Pages"))?;
         let mut out = Vec::new();
         self.walk_pages(pages_ref, &mut out, 0)?;
@@ -105,15 +102,15 @@ impl PdfFile {
             return Err(Error::Malformed("page tree too deep / cyclic"));
         }
         let dict = self.obj_dict(node)?;
-        let ty = po::dict_get(&self.base, dict, "/Type")
-            .map(|r| self.base[r.0..r.1].to_vec())
+        let ty = po::dict_get(&self.view, dict, "/Type")
+            .map(|r| self.view[r.0..r.1].to_vec())
             .unwrap_or_default();
         if ty == b"/Page" {
             out.push(node);
             return Ok(());
         }
-        if let Some(kids) = po::dict_get(&self.base, dict, "/Kids") {
-            for k in refs_in_array(&self.base, kids) {
+        if let Some(kids) = po::dict_get(&self.view, dict, "/Kids") {
+            for k in refs_in_array(&self.view, kids) {
                 self.walk_pages(k, out, depth + 1)?;
             }
         }
@@ -149,12 +146,12 @@ impl PdfFile {
     }
 
     fn resolve_rectangle(&self, r: (usize, usize)) -> Option<[f64; 4]> {
-        let raw = if let Some(ref_num) = po::as_ref_num(&self.base, r) {
-            let (obj_start, _) = po::find_object(&self.base, ref_num)?;
-            let end = po::skip_value(&self.base, obj_start);
-            &self.base[obj_start..end]
+        let raw = if let Some(ref_num) = po::as_ref_num(&self.view, r) {
+            let (obj_start, _) = self.index.find(&self.view, ref_num)?;
+            let end = po::skip_value(&self.view, obj_start);
+            &self.view[obj_start..end]
         } else {
-            &self.base[r.0..r.1]
+            &self.view[r.0..r.1]
         };
 
         let s = String::from_utf8_lossy(raw);
@@ -177,8 +174,8 @@ impl PdfFile {
         while depth < 32 {
             if let Ok(dict) = self.obj_dict(cur_obj) {
                 // Check CropBox first, then MediaBox
-                let box_ref = po::dict_get(&self.base, dict, "/CropBox")
-                    .or_else(|| po::dict_get(&self.base, dict, "/MediaBox"));
+                let box_ref = po::dict_get(&self.view, dict, "/CropBox")
+                    .or_else(|| po::dict_get(&self.view, dict, "/MediaBox"));
 
                 if let Some(r) = box_ref {
                     if let Some(nums) = self.resolve_rectangle(r) {
@@ -189,8 +186,8 @@ impl PdfFile {
                 }
 
                 // If not found on this node, follow /Parent up the page tree
-                if let Some(parent_ref) = po::dict_get(&self.base, dict, "/Parent") {
-                    if let Some(parent_num) = po::as_ref_num(&self.base, parent_ref) {
+                if let Some(parent_ref) = po::dict_get(&self.view, dict, "/Parent") {
+                    if let Some(parent_num) = po::as_ref_num(&self.view, parent_ref) {
                         cur_obj = parent_num;
                         depth += 1;
                         continue;
@@ -327,7 +324,8 @@ impl PdfFile {
             )
             .into_bytes(),
         );
-        self.rewrite_catalog(ef, fs, &hash)?;
+        let base_hash = Sha256::digest(&self.view[..self.base_len]);
+        self.rewrite_catalog(ef, fs, &hash, &base_hash)?;
         Ok(())
     }
 
@@ -683,18 +681,18 @@ impl PdfFile {
     fn rewrite_page(&mut self, page_num: u32, annots: &[u32]) -> Result<()> {
         let dict = self.obj_dict(page_num)?;
         let mut kept: Vec<u32> = Vec::new();
-        if let Some(r) = po::dict_get(&self.base, dict, "/Annots") {
-            let annot_range = if let Some(ind_num) = po::as_ref_num(&self.base, r) {
-                po::find_object(&self.base, ind_num)
+        if let Some(r) = po::dict_get(&self.view, dict, "/Annots") {
+            let annot_range = if let Some(ind_num) = po::as_ref_num(&self.view, r) {
+                self.index.find(&self.view, ind_num)
             } else {
                 Some(r)
             };
             if let Some(ar) = annot_range {
-                for n in refs_in_array(&self.base, ar) {
+                for n in refs_in_array(&self.view, ar) {
                     let is_ours = self
                         .obj_dict(n)
                         .ok()
-                        .map(|d| po::dict_get(&self.base, d, "/Inkw_Sid").is_some())
+                        .map(|d| po::dict_get(&self.view, d, "/Inkw_Sid").is_some())
                         .unwrap_or(false);
                     if !is_ours {
                         kept.push(n);
@@ -703,7 +701,7 @@ impl PdfFile {
             }
         }
         let mut body = b"<< ".to_vec();
-        body.extend_from_slice(&po::dict_without(&self.base, dict, &["/Annots"]));
+        body.extend_from_slice(&po::dict_without(&self.view, dict, &["/Annots"]));
         body.extend_from_slice(b"/Annots [");
         for n in kept.iter().chain(annots.iter()) {
             body.extend_from_slice(format!("{n} 0 R ").as_bytes());
@@ -713,23 +711,23 @@ impl PdfFile {
         Ok(())
     }
 
-    fn rewrite_catalog(&mut self, ef: u32, fs: u32, hash: &[u8]) -> Result<()> {
+    fn rewrite_catalog(&mut self, ef: u32, fs: u32, hash: &[u8], base_hash: &[u8]) -> Result<()> {
         let dict = self.obj_dict(self.root_num)?;
 
         // 1. Check if existing catalog has /Names and preserve other trees (e.g. /Dests, /JavaScript) and existing EmbeddedFiles
-        let names_section = if let Some(names_range) = po::dict_get(&self.base, dict, "/Names") {
-            let names_inner = if let Some(ind) = po::as_ref_num(&self.base, names_range) {
+        let names_section = if let Some(names_range) = po::dict_get(&self.view, dict, "/Names") {
+            let names_inner = if let Some(ind) = po::as_ref_num(&self.view, names_range) {
                 self.obj_dict(ind).ok()
             } else {
-                po::dict_inner(&self.base, names_range.0).ok()
+                po::dict_inner(&self.view, names_range.0).ok()
             };
             if let Some(inner) = names_inner {
                 let mut existing_pairs = Vec::new();
-                if let Some(ef_range) = po::dict_get(&self.base, inner, "/EmbeddedFiles") {
-                    existing_pairs = extract_embedded_files_names(&self.base, ef_range);
+                if let Some(ef_range) = po::dict_get(&self.view, inner, "/EmbeddedFiles") {
+                    existing_pairs = extract_embedded_files_names(&self.view, &self.index, ef_range);
                 }
                 existing_pairs.push(format!("(inkwell.doc) {fs} 0 R"));
-                let mut nb = po::dict_without(&self.base, inner, &["/EmbeddedFiles"]);
+                let mut nb = po::dict_without(&self.view, inner, &["/EmbeddedFiles"]);
                 nb.extend_from_slice(
                     format!("/EmbeddedFiles << /Names [{}] >>\n", existing_pairs.join(" ")).as_bytes(),
                 );
@@ -742,16 +740,23 @@ impl PdfFile {
         };
 
         // 2. Check if existing catalog has /AF and preserve other attachments
-        let af_section = if let Some(af_range) = po::dict_get(&self.base, dict, "/AF") {
-            let af_inner = if let Some(ind) = po::as_ref_num(&self.base, af_range) {
-                po::find_object(&self.base, ind)
+        let af_section = if let Some(af_range) = po::dict_get(&self.view, dict, "/AF") {
+            let af_inner = if let Some(ind) = po::as_ref_num(&self.view, af_range) {
+                self.index.find(&self.view, ind)
             } else {
                 Some(af_range)
             };
             let mut af_refs = Vec::new();
             if let Some(ar) = af_inner {
-                for n in refs_in_array(&self.base, ar) {
-                    if n != fs {
+                for n in refs_in_array(&self.view, ar) {
+                    // Drop earlier generations' sidecar filespecs; keeping them
+                    // would pin every old sidecar in the file forever.
+                    let ours = self
+                        .obj_dict(n)
+                        .ok()
+                        .and_then(|d| po::dict_get(&self.view, d, "/UF"))
+                        .is_some_and(|r| &self.view[r.0..r.1] == b"(inkwell.doc)");
+                    if n != fs && !ours {
                         af_refs.push(format!("{n} 0 R"));
                     }
                 }
@@ -764,9 +769,9 @@ impl PdfFile {
 
         let mut body = b"<< ".to_vec();
         body.extend_from_slice(&po::dict_without(
-            &self.base,
+            &self.view,
             dict,
-            &["/Names", "/AF", "/Inkw_Doc", "/Inkw_Ver", "/Inkw_Hash"],
+            &["/Names", "/AF", "/Inkw_Doc", "/Inkw_Ver", "/Inkw_Hash", "/Inkw_Base", "/Inkw_BaseHash"],
         ));
         body.extend_from_slice(names_section.as_bytes());
         body.extend_from_slice(af_section.as_bytes());
@@ -774,8 +779,12 @@ impl PdfFile {
             format!(
                 "/Inkw_Doc {ef} 0 R\n\
                  /Inkw_Ver 1\n\
-                 /Inkw_Hash <{}>\n>>",
-                hex(hash)
+                 /Inkw_Hash <{}>\n\
+                 /Inkw_Base {}\n\
+                 /Inkw_BaseHash <{}>\n>>",
+                hex(hash),
+                self.base_len,
+                hex(base_hash)
             )
             .as_bytes(),
         );
@@ -787,7 +796,8 @@ impl PdfFile {
     /// Serialise the appended generation. The prefix is byte-identical to the
     /// input, always.
     pub fn finish(self) -> Vec<u8> {
-        let mut buf = self.base;
+        let mut buf = self.view;
+        buf.truncate(self.base_len); // drop materialised object-stream copies
         if !buf.ends_with(b"\n") {
             buf.push(b'\n');
         }
@@ -798,31 +808,56 @@ impl PdfFile {
             buf.extend_from_slice(body);
             buf.extend_from_slice(b"\nendobj\n");
         }
-        let xref_off = buf.len();
-        buf.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
-        // one subsection per object: valid, and avoids run-length bookkeeping
-        for (num, off) in &offsets {
-            buf.extend_from_slice(format!("{num} 1\n{off:010} 00000 n \n").as_bytes());
-        }
-        buf.extend_from_slice(
-            format!(
-                "trailer\n<< /Size {} /Root {} 0 R /Prev {}",
-                self.next_id, self.root_num, self.prev_xref
-            )
-            .as_bytes(),
-        );
+
+        let mut trailer = format!("/Root {} 0 R /Prev {}", self.root_num, self.prev_xref).into_bytes();
         if let Some(info) = &self.trailer_info {
-            buf.extend_from_slice(b" /Info ");
-            buf.extend_from_slice(info);
+            trailer.extend_from_slice(b" /Info ");
+            trailer.extend_from_slice(info);
         }
-        if let Some(enc) = &self.trailer_encrypt {
-            buf.extend_from_slice(b" /Encrypt ");
-            buf.extend_from_slice(enc);
+        trailer.extend_from_slice(b" /ID ");
+        trailer.extend_from_slice(&update_trailer_id(self.trailer_id.as_deref()));
+
+        let xref_off = buf.len();
+        if self.xref_stream {
+            // ISO 32000-1 §7.5.8.4: an update to an xref-stream file must use
+            // an xref stream; a classic table chained after one is invalid for
+            // strict readers. The stream lists itself.
+            let xnum = self.next_id;
+            offsets.insert(xnum, xref_off);
+            let mut index = String::new();
+            let mut rows = Vec::with_capacity(offsets.len() * 7);
+            for (num, off) in &offsets {
+                index.push_str(&format!("{num} 1 "));
+                rows.push(1u8);
+                rows.extend_from_slice(&(*off as u32).to_be_bytes());
+                rows.extend_from_slice(&[0, 0]);
+            }
+            let mut z = ZlibEncoder::new(Vec::new(), Compression::best());
+            z.write_all(&rows).expect("in-memory write");
+            let packed = z.finish().expect("in-memory finish");
+            buf.extend_from_slice(
+                format!(
+                    "{xnum} 0 obj\n<< /Type /XRef /Size {} /W [1 4 2] /Index [{}] ",
+                    xnum + 1,
+                    index.trim_end()
+                )
+                .as_bytes(),
+            );
+            buf.extend_from_slice(&trailer);
+            buf.extend_from_slice(format!(" /Filter /FlateDecode /Length {} >>\nstream\n", packed.len()).as_bytes());
+            buf.extend_from_slice(&packed);
+            buf.extend_from_slice(b"\nendstream\nendobj\n");
+        } else {
+            buf.extend_from_slice(b"xref\n0 1\n0000000000 65535 f \n");
+            // one subsection per object: valid, and avoids run-length bookkeeping
+            for (num, off) in &offsets {
+                buf.extend_from_slice(format!("{num} 1\n{off:010} 00000 n \n").as_bytes());
+            }
+            buf.extend_from_slice(format!("trailer\n<< /Size {} ", self.next_id).as_bytes());
+            buf.extend_from_slice(&trailer);
+            buf.extend_from_slice(b" >>\n");
         }
-        let updated_id = update_trailer_id(self.trailer_id.as_deref());
-        buf.extend_from_slice(b" /ID ");
-        buf.extend_from_slice(&updated_id);
-        buf.extend_from_slice(format!(" >>\nstartxref\n{xref_off}\n%%EOF\n").as_bytes());
+        buf.extend_from_slice(format!("startxref\n{xref_off}\n%%EOF\n").as_bytes());
         buf
     }
 }
@@ -860,6 +895,46 @@ fn update_trailer_id(orig: Option<&[u8]>) -> Vec<u8> {
 // reading the sidecar back
 // ---------------------------------------------------------------------------
 
+/// The bytes the next BezierNotes generation should be appended to.
+///
+/// Every save records `/Inkw_Base` (the length of the bytes it was appended
+/// to) and `/Inkw_BaseHash` in the catalog. When the file is still exactly
+/// "that base + one BezierNotes generation", appending to the base instead of
+/// the whole file replaces our previous generation rather than stacking on
+/// it, so the file stays `original + current ink` across any number of
+/// sessions instead of growing with each one.
+///
+/// Anything else (no marker, hash mismatch, or another tool's incremental
+/// update after ours) returns the whole file: never discard someone else's
+/// revision to save bytes.
+pub fn writable_base(bytes: &[u8]) -> &[u8] {
+    rebase_len(bytes).map_or(bytes, |n| &bytes[..n])
+}
+
+fn rebase_len(bytes: &[u8]) -> Option<usize> {
+    ::memchr::memmem::find(bytes, b"/Inkw_Base ")?;
+    let mut view = bytes.to_vec();
+    let index = ObjIndex::build(&mut view).ok()?;
+    let d = &view[..];
+    let (bs, _) = index.find(d, index.trailer.root?)?;
+    let cat = po::dict_inner(d, bs).ok()?;
+    let len = usize::try_from(po::as_int(d, po::dict_get(d, cat, "/Inkw_Base")?)?).ok()?;
+    let want = po::dict_get(d, cat, "/Inkw_BaseHash")
+        .map(|r| String::from_utf8_lossy(&d[r.0..r.1]).trim().trim_matches(['<', '>']).to_ascii_lowercase())?;
+    if len == 0 || len >= bytes.len() {
+        return None;
+    }
+    let base = &bytes[..len];
+    if hex(&Sha256::digest(base)) != want {
+        return None;
+    }
+    // Exactly one generation after the base, and it is ours: the newest
+    // section starts past the base and chains straight back to the base's
+    // own newest section. A later foreign update would chain to ours instead.
+    let base_xref = po::last_startxref(base).ok()?;
+    (index.last_xref >= len && index.last_prev == Some(base_xref)).then_some(len)
+}
+
 /// Extract and verify the embedded editable data.
 pub enum SidecarStatus {
     /// Full-fidelity data recovered.
@@ -882,18 +957,18 @@ pub fn read_sidecar(bytes: &[u8]) -> Result<SidecarStatus> {
     if ::memchr::memmem::find(d, b"/Inkw_Doc").is_none() {
         return Ok(SidecarStatus::Absent);
     }
-    let tr = po::last_trailer_dict(d)?;
-    let root = po::dict_get(d, tr, "/Root")
-        .and_then(|r| po::as_ref_num(d, r))
-        .ok_or(Error::NoRoot)?;
-    let (bs, _) = po::find_object(d, root).ok_or(Error::MissingObject(root))?;
+    let mut view = d.to_vec();
+    let index = ObjIndex::build(&mut view)?;
+    let d = &view[..];
+    let root = index.trailer.root.ok_or(Error::NoRoot)?;
+    let (bs, _) = index.find(d, root).ok_or(Error::MissingObject(root))?;
     let cat = po::dict_inner(d, bs)?;
 
     let ef = match po::dict_get(d, cat, "/Inkw_Doc").and_then(|r| po::as_ref_num(d, r)) {
         Some(n) => n,
         None => return Ok(SidecarStatus::Absent),
     };
-    let raw = match read_stream(d, ef) {
+    let raw = match read_stream_in(d, &index, ef) {
         Ok(v) => v,
         Err(e) => return Ok(SidecarStatus::Corrupt(e.to_string())),
     };
@@ -916,7 +991,13 @@ pub fn read_sidecar(bytes: &[u8]) -> Result<SidecarStatus> {
 
 /// Decode one stream object's data, honouring `/Filter /FlateDecode`.
 pub fn read_stream(d: &[u8], num: u32) -> Result<Vec<u8>> {
-    let (bs, be) = po::find_object(d, num).ok_or(Error::MissingObject(num))?;
+    let mut view = d.to_vec();
+    let index = ObjIndex::build(&mut view)?;
+    read_stream_in(&view, &index, num)
+}
+
+fn read_stream_in(d: &[u8], index: &ObjIndex, num: u32) -> Result<Vec<u8>> {
+    let (bs, be) = index.find(d, num).ok_or(Error::MissingObject(num))?;
     let dict = po::dict_inner(d, bs)?;
     let sk = po::find(&d[bs..be], b"stream", 0)
         .map(|p| bs + p)
@@ -933,7 +1014,7 @@ pub fn read_stream(d: &[u8], num: u32) -> Result<Vec<u8>> {
             if let Some(n) = po::as_int(d, r) {
                 Some(n)
             } else if let Some(ind) = po::as_ref_num(d, r) {
-                let (ind_bs, ind_be) = po::find_object(d, ind)?;
+                let (ind_bs, ind_be) = index.find(d, ind)?;
                 po::as_int(d, (ind_bs, ind_be))
             } else {
                 None
@@ -1018,9 +1099,9 @@ fn refs_in_array(d: &[u8], range: (usize, usize)) -> Vec<u32> {
     out
 }
 
-fn extract_embedded_files_names(d: &[u8], ef_range: (usize, usize)) -> Vec<String> {
+fn extract_embedded_files_names(d: &[u8], index: &ObjIndex, ef_range: (usize, usize)) -> Vec<String> {
     let ef_inner = if let Some(ind) = po::as_ref_num(d, ef_range) {
-        if let Some(obj) = po::find_object(d, ind) {
+        if let Some(obj) = index.find(d, ind) {
             po::dict_inner(d, obj.0).ok()
         } else {
             None
@@ -1032,7 +1113,7 @@ fn extract_embedded_files_names(d: &[u8], ef_range: (usize, usize)) -> Vec<Strin
     if let Some(inner) = ef_inner {
         if let Some(names_arr_range) = po::dict_get(d, inner, "/Names") {
             let arr_range = if let Some(ind) = po::as_ref_num(d, names_arr_range) {
-                if let Some(obj) = po::find_object(d, ind) {
+                if let Some(obj) = index.find(d, ind) {
                     obj
                 } else {
                     names_arr_range

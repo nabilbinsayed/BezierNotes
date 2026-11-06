@@ -6,7 +6,7 @@
 | **Effort** | L (~700 lines in `pdfobj.rs` / `pdf.rs` + tests) |
 | **Category** | File-Format Integrity / Non-Negotiable #2 |
 | **Depends on** | 087 |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-06; see Outcome) |
 
 ## Why
 
@@ -69,3 +69,20 @@ Required new assertions (in Plan 087's `conformance.rs`):
 ## STOP Conditions
 - STOP if writing an xref-stream section makes `qpdf --check` or Acrobat Reader complain about *any* fixture. Do not ship a section format that only PDFium accepts.
 - STOP if rebasing would drop a non-BezierNotes revision. The hash check must make this impossible; add a fixture with a foreign incremental update after ours to prove it.
+
+## Outcome (2026-11-06)
+
+**Part A: native xref streams.** New `inkwell-core/src/xref.rs` (`ObjIndex`) walks the `/Prev` chain newest-first across classic tables, hybrid `/XRefStm` and `/Type /XRef` streams (Flate + PNG predictors). It merges trailers so linearized files find `/Root` in the first-page trailer, and *materialises* `/ObjStm` members past the end of the in-memory buffer, so every existing `pdfobj` byte-range helper works on them unchanged. `PdfFile` keeps `view` + `base_len`; `finish()` truncates to `base_len` before appending, so materialised copies never reach disk. When the newest input section is an xref stream, `finish()` writes an xref-stream section (`/W [1 4 2]`, Flate) that lists itself. Object lookup is now offset-table based, falling back to the old byte scan only for objects whose xref offset doesn't land on their header (tested by shifting every offset by one). A side effect: opening the 9 MB Bangla textbook takes 3 ms.
+
+**Encrypted files** are refused with `Error::Encrypted` and a plain-language message in the app. Encrypting appended objects is deferred; refusal replaces the old silent corruption.
+
+**Repair-only PDFium.** `commands.rs::open_writable_base` is shared by save and export (the duplicated block is gone). PDFium re-serialisation runs only when our parser fails on a non-encrypted file. Before the first repaired save, the original is written once to `<name>.orig.pdf`, and a `pdf-repaired` event shows a warning toast naming it.
+
+**Part B: bounded growth.** Every non-flattened save writes `/Inkw_Base <len>` + `/Inkw_BaseHash <sha256>` (the bytes it was appended to). `pdf::writable_base(file)` returns that prefix only when the hash matches **and** the newest section's `/Prev` is the base's own newest section, i.e. nothing but our one generation follows. On open, `rebased_original()` uses it. A foreign incremental update after ours, or a tampered prefix, falls back to the whole file (both tested; the foreign-update guard was mutation-tested). Stale sidecar filespecs are also dropped from `/AF`, so even un-rebased chains name only the current sidecar.
+
+**Results.** Plan 087's `KNOWN_FAILURES` is now empty: prefix preserved on xref-stream, object-stream, linearized and the real IRS W-9 form; growth over 10 sessions ≤ first save + 64 B; encrypted refused. New `tests/xref_streams.rs` (10 tests). Goldens regenerated (only the two new catalog keys changed). Rust 111/111, clippy clean (both workspaces), smoke 150/150, torture 200/200.
+
+**Not done / follow-ups**
+- No signed-PDF fixture yet, so "signature still validates" is untested. Generating one needs a test certificate (`pdfsig` can't sign). Add it with Plan 098's release corpus.
+- The page operations (insert/delete/reorder/rotate) still rewrite the whole file through PDFium by design. After one, the prefix is PDFium's output and rebasing correctly falls back to whole-file appends. Making page ops incremental is a separate plan's work.
+- Not exercised in the running desktop app (backend logic is covered by the harness, which mirrors `save_pdf`).

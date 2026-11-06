@@ -52,6 +52,7 @@ pub mod pdf;
 pub mod pdfobj;
 pub mod tiles;
 pub mod wal;
+pub mod xref;
 
 pub use doc::{Document, Sheet, SheetKind, Viewport};
 pub use ink::{Brush, IdGen, Sample, Stroke, StrokeBuilder, ToolKind};

@@ -1,17 +1,9 @@
 //! A deliberately shallow PDF reader: just enough structure to perform
 //! incremental updates without implementing a full parser.
 //!
-//! SCOPE AND HONEST LIMITATION
-//! ---------------------------
-//! This handles PDFs with **classic cross-reference tables**. PDFs written with
-//! *cross-reference streams* and *object streams* (PDF 1.5+, which includes most
-//! files produced by modern tools) store the catalog and page objects compressed
-//! inside object streams, where byte-scanning cannot reach them.
-//!
-//! `PdfFile::open` detects that case and returns `Error::XrefStream` rather than
-//! silently corrupting the file. The production answer is to normalise such
-//! documents on import via PDFium (which decompresses object streams for us) and
-//! then append. That belongs in the `inkwell-pdf` crate, not here.
+//! Object lookup goes through `xref::ObjIndex`, which resolves classic tables,
+//! xref streams and object streams; `find_object` below is only the fallback
+//! byte scan for files whose xref offsets are wrong.
 //!
 //! Everything in this module operates on bytes, never on `str`: PDF strings and
 //! streams are not valid UTF-8 and lossy conversion would corrupt them.
@@ -22,7 +14,9 @@ pub enum Error {
     NoTrailer,
     NoRoot,
     NoSize,
-    XrefStream,
+    /// The file has a `/Encrypt` dictionary. Appending plaintext objects to it
+    /// would corrupt it for every other reader, so writing is refused.
+    Encrypted,
     MissingObject(u32),
     Malformed(&'static str),
     Io(std::io::Error),
@@ -35,10 +29,10 @@ impl std::fmt::Display for Error {
             Error::NoTrailer => write!(f, "no trailer dictionary found"),
             Error::NoRoot => write!(f, "trailer has no /Root"),
             Error::NoSize => write!(f, "trailer has no /Size"),
-            Error::XrefStream => write!(
+            Error::Encrypted => write!(
                 f,
-                "this PDF uses cross-reference streams / object streams; \
-                 normalise it through PDFium before appending"
+                "this PDF is encrypted; BezierNotes cannot save ink into it without breaking it \
+                 for other readers"
             ),
             Error::MissingObject(n) => write!(f, "object {n} not found by scan"),
             Error::Malformed(s) => write!(f, "malformed PDF: {s}"),

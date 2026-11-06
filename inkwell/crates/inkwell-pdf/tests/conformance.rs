@@ -1,14 +1,17 @@
 //! Plan 087: file-format conformance harness.
 //!
-//! Every fixture is saved exactly the way the desktop app saves it (`PdfFile`
-//! first, PDFium normalisation as the fallback, see `commands.rs::save_pdf`),
-//! then the output is checked against the format contract:
+//! Every fixture is saved exactly the way the desktop app saves it (see
+//! `commands.rs::open_writable_base` and `rebased_original`): `PdfFile`
+//! natively, PDFium repair only for damaged files, encrypted files refused,
+//! and on reopen the base is `pdf::writable_base(file)`. The output is then
+//! checked against the format contract:
 //!
 //!   qpdf_check      `qpdf --check` accepts both generations
 //!   prefix          the original bytes survive as a byte-identical prefix
 //!   sidecar         Layer 3 reads back as the exact document we wrote
 //!   pdfium_reopen   PDFium opens the output with the same page count
 //!   bounded_growth  a second session saving unchanged ink adds ~nothing
+//!   refuses_encrypted  encrypted inputs are refused, never written into
 //!
 //! Known defects are listed in `KNOWN_FAILURES` with the plan that fixes them.
 //! The list is a ratchet: an unlisted failure fails the test, and so does a
@@ -27,18 +30,9 @@ use inkwell_pdf::{init_pdfium, normalise, Pdfium};
 
 /// (fixture file name or "*", check name, plan that owns the fix).
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    // PdfFile rejects xref streams, so the app re-serialises through PDFium and
-    // the original bytes are lost on first save.
-    ("xref_stream.pdf", "prefix", "Plan 088"),
-    ("objstm_multi_page.pdf", "prefix", "Plan 088"),
-    ("irs_w9.pdf", "prefix", "Plan 088"),
-    // Linearized files keep /Root in the first-page trailer; PdfFile reads
-    // only the last trailer ("trailer has no /Root") and falls back to PDFium.
-    ("linearized.pdf", "prefix", "Plan 088"),
-    // Each session re-appends all ink + sidecar on top of earlier generations.
-    ("*", "bounded_growth", "Plan 088"),
-    // Appended objects are written in plaintext into an encrypted file.
-    ("encrypted_aes256.pdf", "qpdf_check", "Plan 088"),
+    // Empty since Plan 088 (xref streams, linearized files, bounded growth,
+    // encrypted refusal). Add an entry here, with its plan, when a new
+    // fixture exposes a defect that is not fixed in the same change.
 ];
 
 fn strict() -> bool {
@@ -121,10 +115,11 @@ pub fn canonical(d: &Document) -> Document {
 }
 
 /// Mirror of `commands.rs::save_pdf`: open the base with our writer, falling
-/// back to PDFium normalisation, then append one generation.
+/// back to PDFium repair, then append one generation.
 fn save_like_app(pdfium: Option<&Pdfium>, base: &[u8], d: &Document) -> Result<Vec<u8>, String> {
     let mut f = match PdfFile::open(base.to_vec()) {
         Ok(f) => f,
+        Err(e @ inkwell_core::pdfobj::Error::Encrypted) => return Err(format!("refused: {e}")),
         Err(e) => {
             let pdfium = pdfium.ok_or_else(|| format!("needs normalisation ({e}) but PDFium unavailable"))?;
             let nb = normalise(pdfium, base).map_err(|e| format!("normalise: {e:?}"))?;
@@ -202,7 +197,16 @@ fn check_fixture(pdfium: Option<&Pdfium>, has_qpdf: bool, path: &Path, out: &mut
     let d = representative_doc(n_pages);
 
     // ---- session 1 -------------------------------------------------------
+    let encrypted = fx.contains("encrypted");
+    if encrypted {
+        ran.push((fx.clone(), "refuses_encrypted"));
+    }
     let gen1 = match save_like_app(pdfium, &base, &d) {
+        Ok(_) if encrypted => {
+            fail("refuses_encrypted", "an encrypted file was written into".into());
+            return;
+        }
+        Err(e) if encrypted && e.starts_with("refused") => return,
         Ok(b) => b,
         Err(e) => {
             fail("sidecar", format!("save failed: {e}"));
@@ -235,9 +239,9 @@ fn check_fixture(pdfium: Option<&Pdfium>, has_qpdf: bool, path: &Path, out: &mut
     }
 
     // ---- session 2: reopen the saved file and save the same ink again -----
-    // `open_pdf` makes the whole on-disk file the base (commands.rs:621).
+    // `open_pdf` rebases onto the bytes before our generation.
     let d2 = sidecar_doc(&gen1).unwrap_or_else(|_| d.clone());
-    match save_like_app(pdfium, &gen1, &d2) {
+    match save_like_app(pdfium, pdf::writable_base(&gen1), &d2) {
         Ok(gen2) => {
             ran.push((fx.clone(), "bounded_growth"));
             let first = gen1.len().saturating_sub(base.len());

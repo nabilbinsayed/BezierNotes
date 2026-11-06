@@ -618,7 +618,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(arc_bytes.clone());
-    *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    *state.original_pdf_bytes.lock().unwrap() = Some(rebased_original(arc_bytes));
     state.clear_page_caches();
     state.record_disk_stamp(&path);
 
@@ -778,7 +778,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(arc_bytes.clone());
-    *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    *state.original_pdf_bytes.lock().unwrap() = Some(rebased_original(arc_bytes));
     state.clear_page_caches();
     state.record_disk_stamp(&path);
 
@@ -1396,6 +1396,55 @@ fn apply_frontend_payload(
     Ok(())
 }
 
+/// The save base for a freshly opened file: the bytes before our previous
+/// generation when the file is exactly "base + one BezierNotes generation",
+/// otherwise the whole file (see `inkwell_core::pdf::writable_base`).
+fn rebased_original(bytes: Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+    let base_len = inkwell_core::pdf::writable_base(&bytes).len();
+    if base_len == bytes.len() {
+        bytes
+    } else {
+        Arc::new(bytes[..base_len].to_vec())
+    }
+}
+
+/// Open `bytes` for appending a BezierNotes generation.
+///
+/// Valid PDFs of every xref flavour (classic, xref streams, object streams,
+/// linearized) open natively, so their original bytes survive as a prefix.
+/// PDFium re-serialisation ("repair") runs only for files our parser cannot
+/// read, and the caller is told so it can keep a backup and inform the user.
+/// Encrypted files are refused outright: appending plaintext objects to them
+/// corrupts them for every other reader.
+fn open_writable_base(state: &AppState, bytes: &[u8]) -> Result<(Option<Vec<u8>>, PdfFile), String> {
+    match PdfFile::open(bytes.to_vec()) {
+        Ok(f) => Ok((None, f)),
+        Err(inkwell_core::pdfobj::Error::Encrypted) => Err(
+            "This PDF is password-protected (encrypted). BezierNotes can't save ink into it yet \
+             without breaking it for other apps."
+                .to_string(),
+        ),
+        Err(e) => {
+            eprintln!("[inkwell] Base PDF is damaged ({e}); repairing through PDFium");
+            let pdfium_guard = state.pdfium.lock().unwrap();
+            let pdfium = pdfium_guard
+                .as_ref()
+                .ok_or_else(|| format!("This PDF is damaged ({e}) and PDFium is unavailable to repair it."))?;
+            let nb = inkwell_pdf::normalise(pdfium, bytes)
+                .map_err(|norm_err| format!("Repairing the damaged PDF failed: {norm_err:?}"))?;
+            let f = PdfFile::open(nb.clone())
+                .map_err(|open_err| format!("The repaired PDF still cannot be read: {open_err}"))?;
+            Ok((Some(nb), f))
+        }
+    }
+}
+
+/// `notes.pdf` -> `notes.orig.pdf`, next to it.
+fn repair_backup_path(target: &Path) -> PathBuf {
+    let stem = target.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+    target.with_file_name(format!("{stem}.orig.pdf"))
+}
+
 #[tauri::command]
 pub async fn save_pdf(
     out_path_str: Option<String>,
@@ -1403,6 +1452,7 @@ pub async fn save_pdf(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     apply_frontend_payload(state.inner(), images, strokes, texts, bookmarks)?;
@@ -1436,20 +1486,19 @@ pub async fn save_pdf(
     };
 
     // Open PDF and append vector ink layers, image annotations, and text annotations
-    let (norm_bytes, mut pdf_file) = match PdfFile::open(original_bytes.to_vec()) {
-        Ok(f) => (None, f),
-        Err(e) => {
-            eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
-            let pdfium_guard = state.pdfium.lock().unwrap();
-            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-                format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
-            })?;
-            let nb = inkwell_pdf::normalise(pdfium, original_bytes)
-                .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
-            let f = PdfFile::open(nb.clone())
-                .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
-            (Some(nb), f)
+    let (norm_bytes, mut pdf_file) = open_writable_base(state.inner(), original_bytes)?;
+
+    // A repaired file no longer starts with the original bytes, so keep the
+    // original once, beside the document, before the first repaired save.
+    let repair_backup = if norm_bytes.is_some() {
+        let backup = repair_backup_path(&target_path);
+        if !backup.exists() {
+            atomic_write(&backup, original_bytes)
+                .map_err(|e| format!("Could not back up the original before repairing it ({backup:?}): {e}"))?;
         }
+        Some(backup)
+    } else {
+        None
     };
 
     pdf_file.write_document(doc, inkwell_core::pdf::DEFAULT_GROUP)
@@ -1502,6 +1551,11 @@ pub async fn save_pdf(
         let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
     }
 
+    if let Some(backup) = repair_backup {
+        use tauri::Emitter;
+        let _ = window.emit("pdf-repaired", backup.to_string_lossy().to_string());
+    }
+
     Ok(target_path.to_string_lossy().to_string())
 }
 
@@ -1514,8 +1568,9 @@ pub async fn save_pdf_dialog(
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let dialog_window = window.clone();
     let file_option = tauri::async_runtime::spawn_blocking(move || {
-        window.dialog()
+        dialog_window.dialog()
             .file()
             .add_filter("PDF Document", &["pdf"])
             .set_file_name("Untitled.pdf")
@@ -1527,7 +1582,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), images, strokes, texts, bookmarks, state).await
+        save_pdf(Some(path_str), images, strokes, texts, bookmarks, window, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -1666,22 +1721,8 @@ pub async fn export_pdf_custom(
         None => (original_bytes.as_slice().to_vec(), None),
     };
 
-    let (norm_bytes, mut pdf_file) = match PdfFile::open(base_bytes.clone()) {
-        Ok(f) => (None, f),
-        Err(e) => {
-            eprintln!("[inkwell] Export base PDF requires normalisation ({e:?})...");
-            let pdfium_guard = state.pdfium.lock().unwrap();
-            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-                format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
-            })?;
-            let nb = inkwell_pdf::normalise(pdfium, &base_bytes)
-                .map_err(|norm_err| format!("PDFium normalisation failed during export: {norm_err:?}"))?;
-            let f = PdfFile::open(nb.clone())
-                .map_err(|open_err| format!("Failed to parse normalised PDF for export: {open_err}"))?;
-            (Some(nb), f)
-        }
-    };
-    let _ = norm_bytes;
+    // An export is a new file, so a repaired base needs no backup.
+    let (_repaired, mut pdf_file) = open_writable_base(state.inner(), &base_bytes)?;
 
     let export_doc: &Document = export_doc_owned.as_ref().unwrap_or(live_doc);
     if flatten.unwrap_or(false) {

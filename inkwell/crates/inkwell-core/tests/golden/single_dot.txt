@@ -22,6 +22,8 @@ endobj
 /Inkw_Doc 12 0 R
 /Inkw_Ver 1
 /Inkw_Hash <71bffdae26734196cb2bf0eef93cdd410373773eefcaceaa294de20095ea51f1>
+/Inkw_Base 2458
+/Inkw_BaseHash <837aaa227f08b8b5b6706a9b0e8425e3bae9ad0d5e488d3c1c42432c9bfecc7d>
 >>
 endobj
 
