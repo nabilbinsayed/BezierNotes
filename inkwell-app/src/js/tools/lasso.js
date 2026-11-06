@@ -7,6 +7,7 @@ import { state, emit } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as overlays from '../render/overlays.js';
 import * as compositor from '../render/compositor.js';
+import { noteFont } from '../core/note-font.js';
 
 export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
   const handle = overlays.getSelectionHandleAt(screenPt[0], screenPt[1], state, viewport, pane);
@@ -744,10 +745,8 @@ function renderWetTransform(pane, viewport) {
       if (!t.text) continue;
       wctx.save();
       wctx.fillStyle = t.color || '#141724';
-      const weight = t.bold ? 'bold ' : '';
-      const slant = t.italic ? 'italic ' : '';
       const size = t.fontSize || t.font_size || 16;
-      wctx.font = `${slant}${weight}${size}px Inter, system-ui, -apple-system, sans-serif`;
+      wctx.font = noteFont(size, t.bold, t.italic);
       wctx.textBaseline = 'top';
       const lines = (t.text || '').split('\n');
       const lineHeight = size * 1.35;

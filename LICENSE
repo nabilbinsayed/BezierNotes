@@ -27,3 +27,4 @@ SOFTWARE.
 This repository includes or bundles third-party dependencies:
 - Precompiled PDFium binaries and build scripts by Benoit Blanchon (MIT License, see `licenses/pdfium-binaries.txt`).
 - Google PDFium and its subcomponents (Abseil, FreeType, ICU, libjpeg-turbo, libpng, zlib, etc., see `licenses/`).
+- Inter and Noto Sans Bengali fonts, used to draw text notes (SIL Open Font License 1.1; license texts beside the fonts in `inkwell/crates/inkwell-core/fonts/` and `inkwell-app/src/fonts/`).

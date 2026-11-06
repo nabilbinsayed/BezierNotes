@@ -36,6 +36,7 @@ import * as contextMenu from './ui/context-menu.js';
 import * as commandPalette from './ui/command-palette.js';
 import * as signature from './ui/signature.js';
 import * as presentation from './ui/presentation.js';
+import { preloadNoteFonts } from './core/note-font.js';
 
 let _viewport = null;
 
@@ -2566,6 +2567,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   compositor.initCompositor({ tilesCanvas, dryCanvas, wetCanvas, viewport: _viewport });
+  // Notes drawn before the web fonts load use a fallback face; repaint once they arrive.
+  preloadNoteFonts(() => {
+    compositor.invalidateDryPageCache();
+    compositor.redrawAll();
+  });
   compositor.resize();
 
   drawers.setGoToPageCallback((pageIdx, pane) => {

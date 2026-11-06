@@ -39,8 +39,9 @@ fn fixture(rel: &str) -> Vec<u8> {
     std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(rel)).expect("fixture")
 }
 
-/// Bold strokes across the page in a recognisable layout: a box, a diagonal
-/// and a highlighter band. Positions are in page-local points from the top.
+/// Bold strokes across the page in a recognisable layout (a box, a diagonal
+/// and a highlighter band) plus a Bangla/Latin text note, whose appearance is
+/// shaped glyph outlines (Plan 089). Positions are page-local points from the top.
 fn ink_doc(n_pages: usize) -> Document {
     let mut d = Document::for_pdf(n_pages);
     let mut ids = IdGen::seeded(0x5EED);
@@ -54,6 +55,22 @@ fn ink_doc(n_pages: usize) -> Document {
     line(&mut d, ToolKind::Pen, 6.0, &[(80.0, 90.0), (380.0, 90.0), (380.0, 260.0), (80.0, 260.0), (80.0, 90.0)]);
     line(&mut d, ToolKind::Pen, 5.0, &[(90.0, 300.0), (200.0, 420.0), (320.0, 540.0)]);
     line(&mut d, ToolKind::Highlighter, 18.0, &[(100.0, 600.0), (420.0, 600.0)]);
+    d.upsert_text(
+        0,
+        inkwell_core::doc::TextObject {
+            id: "txt_render".into(),
+            sheet: 0,
+            x: 90.0,
+            y: 660.0,
+            text: "বাংলা গণিত ক্ষ — café".into(),
+            font_size: 22.0,
+            color: "#101040".into(),
+            bold: true,
+            italic: false,
+            width: 300.0,
+            height: 30.0,
+        },
+    );
     d
 }
 
@@ -199,7 +216,7 @@ fn ink_renders_the_same_in_pdfium_and_ghostscript() {
         let pm = ink_mask(&pb, &pa, w, h);
         let gm = ink_mask(&gb, &ga, w, h);
         let (pn, gn) = (pm.iter().filter(|x| **x).count(), gm.iter().filter(|x| **x).count());
-        // The three strokes cover roughly 4,000 px at 72 dpi.
+        // Strokes and the note cover roughly 7,000 px at 72 dpi.
         assert!(pn > 1500, "{rel}: PDFium shows almost no ink ({pn} px)");
         assert!(gn > 1500, "{rel}: Ghostscript shows almost no ink ({gn} px)");
         let score = iou(&pm, &gm, w, h);

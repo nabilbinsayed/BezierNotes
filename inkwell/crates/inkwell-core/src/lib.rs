@@ -50,6 +50,7 @@ pub mod doc;
 pub mod ink;
 pub mod pdf;
 pub mod pdfobj;
+pub mod text_shape;
 pub mod tiles;
 pub mod wal;
 pub mod xref;

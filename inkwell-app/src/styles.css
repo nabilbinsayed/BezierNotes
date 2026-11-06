@@ -20,6 +20,23 @@
   src: url('./fonts/Caveat-Variable.woff2') format('woff2');
 }
 
+/* Bangla for text notes; the PDF writer draws saved notes from the same font. */
+@font-face {
+  font-family: 'Noto Sans Bengali';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/NotoSansBengali-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Noto Sans Bengali';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/NotoSansBengali-Bold.woff2') format('woff2');
+}
+
 @font-face {
   font-family: 'Inter';
   font-style: italic;
@@ -4515,7 +4532,7 @@ body.welcome-active .top-header {
   border-radius: 4px;
   color: #0f172a;
   padding: 4px 6px;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', 'Noto Sans Bengali', system-ui, -apple-system, sans-serif;
   font-size: 16px;
   line-height: 1.35;
   outline: none;

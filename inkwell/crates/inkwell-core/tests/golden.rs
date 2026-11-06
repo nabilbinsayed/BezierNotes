@@ -204,8 +204,7 @@ fn golden_text_styles() {
 
 #[test]
 fn golden_non_ascii_text() {
-    // Records today's behaviour (UTF-8 bytes in a WinAnsi font). Plan 089
-    // replaces this appearance with shaped glyph outlines; this snapshot is
-    // expected to change then.
+    // Since Plan 089 the appearance is shaped glyph outlines (Inter + Noto
+    // Sans Bengali), never font text: no Tj, no /Font resources.
     check("non_ascii_text", &doc_with(vec![], vec![text("txt_bn", "café বাংলা", false, false)]));
 }

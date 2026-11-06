@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::doc::{self, Document};
 use crate::ink::{ribbon_path, PathCmd, Stroke, ToolKind};
 use crate::pdfobj::{self as po, Error, Result};
+use crate::text_shape;
 use crate::xref::ObjIndex;
 
 /// Number of strokes sharing one `/Ink` annotation. One annotation per stroke is
@@ -597,75 +598,81 @@ impl PdfFile {
         }
 
         let fs = text_obj.font_size.max(6.0);
-        let line_height = fs * 1.35;
+        let line_height = fs * text_shape::LINE_HEIGHT;
         let lines: Vec<&str> = text_obj.text.split('\n').collect();
         let approx_h = (lines.len() as f64 * line_height).max(text_obj.height.max(20.0));
-        let approx_w = text_obj.width.max(60.0);
+        // The canvas never wraps, so a long line must widen the box rather
+        // than be clipped by the appearance's /BBox.
+        let widest = lines
+            .iter()
+            .map(|l| text_shape::line_width(l, fs, text_obj.bold, text_obj.italic))
+            .fold(0.0, f64::max);
+        let approx_w = text_obj.width.max(60.0).max(widest.ceil() + 1.0);
 
         let x0 = llx + text_obj.x;
         let y0 = ury - (text_obj.y + approx_h);
         let x1 = x0 + approx_w;
         let y1 = y0 + approx_h;
-        let annot_rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
         let annot_w = (x1 - x0).abs();
         let annot_h = (y1 - y0).abs();
+        // Accents on capitals, Bengali vowel signs and italic overhang reach
+        // outside the line box; the canvas doesn't clip them, so neither may
+        // the /BBox. Glyphs keep their line-box coordinates; only the
+        // appearance (and /Rect with it) grows.
+        let (pad_x, pad_y) = (0.15 * fs, 0.4 * fs);
+        let annot_rect = [x0.min(x1) - pad_x, y0.min(y1) - pad_y, x0.max(x1) + pad_x, y0.max(y1) + pad_y];
 
         let (cr, cg, cb) = parse_hex_color_rgb(&text_obj.color);
-        let font_tag = if text_obj.bold && text_obj.italic {
-            "/HelvBI"
-        } else if text_obj.bold {
-            "/HelvB"
-        } else if text_obj.italic {
-            "/HelvI"
-        } else {
-            "/Helv"
-        };
 
-        let font_res = "<< /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> \
-                          /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> \
-                          /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> \
-                          /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >>";
-
+        // Glyph outlines, not font text: every script renders identically in
+        // every reader with nothing embedded (see `text_shape`).
         let mut form_content = Vec::new();
-        let _ = writeln!(form_content, "q\nBT\n{font_tag} {:.2} Tf\n{:.3} {:.3} {:.3} rg", fs, cr, cg, cb);
-        for (idx, line) in lines.iter().enumerate() {
-            let y_offset = annot_h - (idx as f64 + 1.0) * line_height;
-            let escaped = escape_pdf_string(line);
-            let _ = writeln!(form_content, "1 0 0 1 0 {:.2} Tm\n({escaped}) Tj", y_offset.max(0.0));
-        }
-        let _ = writeln!(form_content, "ET\nQ");
+        let _ = writeln!(form_content, "q\n{:.3} {:.3} {:.3} rg", cr, cg, cb);
+        form_content.extend_from_slice(
+            text_shape::note_paths(&text_obj.text, fs, text_obj.bold, text_obj.italic, annot_h).as_bytes(),
+        );
+        let _ = writeln!(form_content, "f\nQ");
 
         let ap = self.add_stream(
             &format!(
-                "/Type /XObject /Subtype /Form /BBox [0 0 {:.3} {:.3}] \
-                 /Resources {font_res}",
-                annot_w, annot_h
+                "/Type /XObject /Subtype /Form /BBox [{:.3} {:.3} {:.3} {:.3}] /Resources << >>",
+                -pad_x,
+                -pad_y,
+                annot_w + pad_x,
+                annot_h + pad_y
             ),
             &form_content,
-            false,
+            true,
         );
 
-        let escaped_contents = if text_obj.text.is_ascii() {
-            format!("({})", escape_pdf_string(&text_obj.text))
-        } else {
-            let mut hex_str = String::from("<FEFF");
-            for u in text_obj.text.encode_utf16() {
-                use std::fmt::Write;
-                let _ = write!(hex_str, "{:04X}", u);
-            }
-            hex_str.push('>');
-            hex_str
-        };
+        let contents = pdf_text_string(&text_obj.text);
+        // Rich text for readers that re-render FreeText from /RC.
+        let weight = if text_obj.bold { "bold" } else { "normal" };
+        let style = if text_obj.italic { "italic" } else { "normal" };
+        let rc = pdf_text_string(&format!(
+            "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\"><p style=\"font-size:{fs:.1}pt;\
+             color:#{:02x}{:02x}{:02x};font-weight:{weight};font-style:{style}\">{}</p></body>",
+            (cr * 255.0).round() as u8,
+            (cg * 255.0).round() as u8,
+            (cb * 255.0).round() as u8,
+            xml_escape(&text_obj.text).replace('\n', "<br/>")
+        ));
         let raw_sid = if text_obj.id.starts_with("txt_") {
             text_obj.id.clone()
         } else {
             format!("txt_{}", text_obj.id)
         };
         let sid = escape_pdf_string(&raw_sid);
+        let font_tag = match (text_obj.bold, text_obj.italic) {
+            (true, true) => "/HeBI",
+            (true, false) => "/HeB",
+            (false, true) => "/HeI",
+            (false, false) => "/Helv",
+        };
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /FreeText /F 4 /Rect [{}] \
-                 /T (Inkwell) /Contents {escaped_contents} \
+                 /T (Inkwell) /Contents {contents} /RC {rc} \
                  /DA ({font_tag} {:.2} Tf {:.3} {:.3} {:.3} rg) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
                 fmt_rect(&annot_rect),
@@ -1176,6 +1183,38 @@ fn parse_hex_color_rgb(hex: &str) -> (f64, f64, f64) {
     } else {
         (0.08, 0.09, 0.14)
     }
+}
+
+/// A PDF text string (§7.9.2.2) that keeps every character, newlines
+/// included: a literal for ASCII, UTF-16BE with BOM otherwise.
+fn pdf_text_string(s: &str) -> String {
+    if s.is_ascii() {
+        let mut out = String::from("(");
+        for c in s.chars() {
+            match c {
+                '(' | ')' | '\\' => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                _ => out.push(c),
+            }
+        }
+        out.push(')');
+        out
+    } else {
+        let mut hex_str = String::from("<FEFF");
+        for u in s.encode_utf16() {
+            let _ = std::fmt::Write::write_fmt(&mut hex_str, format_args!("{u:04X}"));
+        }
+        hex_str.push('>');
+        hex_str
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 fn escape_pdf_string(s: &str) -> String {

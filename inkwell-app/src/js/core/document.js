@@ -6,6 +6,7 @@
 
 import { state, emit } from './state.js';
 import * as history from './history.js';
+import { noteFont } from './note-font.js';
 
 let _mutationListener = null;
 
@@ -247,7 +248,7 @@ export function upsertTextObject(textObj, { recordHistory = true, isNew = false 
       const c = document.createElement('canvas');
       const ctx = c.getContext('2d');
       if (ctx) {
-        ctx.font = `${fontSize}px Inter, system-ui, -apple-system, sans-serif`;
+        ctx.font = noteFont(fontSize, textObj.bold, textObj.italic);
         for (const line of lines) {
           const w = ctx.measureText(line).width;
           if (w > maxLineW) maxLineW = w;

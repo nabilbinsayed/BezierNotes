@@ -10,6 +10,7 @@ import * as templates from './templates.js';
 import * as tiles from './tiles.js';
 import * as overlays from './overlays.js';
 import * as ipc from '../core/ipc.js';
+import { noteFont } from '../core/note-font.js';
 
 let _tilesCanvas, _dryCanvas, _wetCanvas;
 let _tctx, _dctx, _wctx;
@@ -443,10 +444,8 @@ function drawPageContent(ctx, pl, pi) {
         }
         ctx.save();
         ctx.fillStyle = t.color || '#141724';
-        const weight = t.bold ? 'bold ' : '';
-        const slant = t.italic ? 'italic ' : '';
         const size = t.fontSize || t.font_size || 16;
-        ctx.font = `${slant}${weight}${size}px Inter, system-ui, -apple-system, sans-serif`;
+        ctx.font = noteFont(size, t.bold, t.italic);
         ctx.textBaseline = 'top';
         const lines = (t.text || '').split('\n');
         const lineHeight = size * 1.35;

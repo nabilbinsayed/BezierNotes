@@ -2980,6 +2980,36 @@ with sync_playwright() as pw:
           f"res={external_res}")
 
     # -------------------------------------------------------------
+    # T29: Text-note fonts match the PDF writer (Plan 089)
+    # -------------------------------------------------------------
+    print("\n=== T29 Text Note Fonts ===", flush=True)
+    font_res = pg.evaluate("""(async () => {
+      const mod = await import('./js/core/note-font.js');
+      await Promise.all(['400 16px "Noto Sans Bengali"', '700 16px "Noto Sans Bengali"', '400 16px Inter']
+        .map(f => document.fonts.load(f, 'অa')));
+      const c = document.createElement('canvas').getContext('2d');
+      c.font = mod.noteFont(18, false, false);
+      // Width Chromium gives with the bundled fonts; the Rust writer's
+      // text_shape tests pin the same number.
+      const w = c.measureText('বাংলা গণিত: ক্ষ ক্ত স্ত্র কি কৌ').width;
+      return {
+        stack: mod.NOTE_FONT_FAMILY,
+        bengali: document.fonts.check('16px "Noto Sans Bengali"', 'অ'),
+        bengaliBold: document.fonts.check('bold 16px "Noto Sans Bengali"', 'অ'),
+        width: w,
+        editorFont: getComputedStyle(document.querySelector('.inline-text-input') || document.body).fontFamily,
+      };
+    })()""")
+    check("note font stack puts Noto Sans Bengali after Inter",
+          font_res["stack"].startswith('Inter, "Noto Sans Bengali"'), f"stack={font_res['stack']}")
+    check("bundled Noto Sans Bengali regular and bold load in the webview",
+          font_res["bengali"] and font_res["bengaliBold"], f"res={font_res}")
+    check("canvas Bangla line width matches the PDF writer's shaping (205.17 pt +-0.5%)",
+          abs(font_res["width"] - 205.171) / 205.171 < 0.005, f"width={font_res['width']:.3f}")
+    check("inline note editor uses the same font stack",
+          "Noto Sans Bengali" in font_res["editorFont"], f"editor={font_res['editorFont']}")
+
+    # -------------------------------------------------------------
     # T14: Console Hygiene
     # -------------------------------------------------------------
     print("\n=== T14 Console Hygiene ===", flush=True)
