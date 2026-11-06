@@ -82,24 +82,37 @@ cp -u "$PDFIUM_BIN" "$SCRIPT_DIR/inkwell-app/src-tauri/target/release/libpdfium.
 # 5. Install Desktop Entry and Icons
 echo -e "\n${BOLD}[5/6] Installing desktop launcher & icons...${RESET}"
 cd "$SCRIPT_DIR"
+ICON_512="$SCRIPT_DIR/inkwell-app/src-tauri/icons/icon.png"
 ICON_128="$SCRIPT_DIR/inkwell-app/src-tauri/icons/128x128.png"
 ICON_32="$SCRIPT_DIR/inkwell-app/src-tauri/icons/32x32.png"
+ICON_SVG="$SCRIPT_DIR/inkwell-app/src/assets/logo.svg"
 DESKTOP_SRC="$SCRIPT_DIR/dev.inkwell.app.desktop"
 
+mkdir -p "$HOME/.local/share/icons/hicolor/512x512/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/128x128/apps"
 mkdir -p "$HOME/.local/share/icons/hicolor/32x32/apps"
+mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps"
 mkdir -p "$HOME/.local/share/applications"
 
+if [ -f "$ICON_512" ]; then
+    cp "$ICON_512" "$HOME/.local/share/icons/hicolor/512x512/apps/dev.inkwell.app.png"
+fi
 if [ -f "$ICON_128" ]; then
     cp "$ICON_128" "$HOME/.local/share/icons/hicolor/128x128/apps/dev.inkwell.app.png"
 fi
 if [ -f "$ICON_32" ]; then
     cp "$ICON_32" "$HOME/.local/share/icons/hicolor/32x32/apps/dev.inkwell.app.png"
 fi
+if [ -f "$ICON_SVG" ]; then
+    cp "$ICON_SVG" "$HOME/.local/share/icons/hicolor/scalable/apps/dev.inkwell.app.svg"
+fi
 if [ -f "$DESKTOP_SRC" ]; then
     cp "$DESKTOP_SRC" "$HOME/.local/share/applications/dev.inkwell.app.desktop"
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
     fi
     echo -e "${GREEN}✓ Desktop entry and icons installed to ~/.local/share/${RESET}"
 fi
