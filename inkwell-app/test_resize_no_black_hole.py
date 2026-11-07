@@ -91,9 +91,6 @@ def test_resize_behavior():
         assert pan_check['panX'] > 500, f"Expected panX > 500, got {pan_check['panX']}"
         print(" [PASS] Page panned freely across full expanded stage width!")
 
-        screenshot_path = "/home/nboss/.gemini/antigravity/brain/da105d4a-b8d2-4333-9ad3-55797f4a1b0b/test_no_black_hole_verified.png"
-        pg.screenshot(path=screenshot_path)
-        print(f"Visual verification screenshot saved to {screenshot_path}")
         print("\nALL DYNAMIC RESIZE CHECKS PASSED!")
 
 if __name__ == "__main__":

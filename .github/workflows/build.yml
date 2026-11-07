@@ -190,6 +190,17 @@ jobs:
         working-directory: inkwell-app
         run: python test_app_smoke.py
 
+      - name: Focused Regression Suites (Plan 093 triage)
+        # The standalone scripts that pass reliably. The others are listed
+        # with their failing checks in plans/093 and are not run in CI.
+        working-directory: inkwell-app
+        run: |
+          python test_lasso_selection.py
+          python test_insert_page_dialog.py
+          python test_palette_dismissal.py
+          python test_resize_no_black_hole.py
+          python test_viewport_and_pressure.py
+
       - name: Build Linux App (AppImage & DEB)
         working-directory: inkwell-app
         run: |

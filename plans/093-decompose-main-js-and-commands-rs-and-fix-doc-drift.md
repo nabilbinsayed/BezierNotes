@@ -6,7 +6,7 @@
 | **Effort** | M (mechanical; large diff, low logic change) |
 | **Category** | Maintainability / Tech Debt |
 | **Depends on** | 087 (safety net); schedule **before** 090/092 touch these files further |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-08; see Outcome) |
 
 ## Why
 
@@ -54,3 +54,44 @@ wc -l inkwell-app/src/js/main.js inkwell-app/src-tauri/src/commands/*.rs
 ## STOP Conditions
 - STOP if any smoke check changes from pass to fail during a "move only" commit. Revert that commit, don't patch forward.
 - No behaviour changes in this plan. Bugs found along the way get written down, not fixed here.
+
+## Outcome (2026-11-08)
+
+**Backend.** `src-tauri/src/commands.rs` (2,832 lines) became `commands/` with `mod.rs` (346 lines: shared imports, DTOs and helpers) plus `open`, `render`, `ink`, `save`, `export`, `pages`, `text`, `session` and `window` (64–494 lines each). Children `use super::*`, so shared helpers stay private. The three cross-module helpers (`apply_frontend_payload`, `open_writable_base`, `rebased_original`) are `pub(super)`. `main.rs` registers each command by its full path (`commands::save::save_pdf`), because Tauri's generated `__cmd__*` macros do not travel through glob re-exports. The duplicated normalise block was already merged into `open_writable_base` by Plan 088.
+
+**Frontend.** `js/main.js` went from 2,988 to 480 lines (startup only). New modules:
+- `app/`: `commands-registry`, `ui-bindings`, `document-loading`, `viewport-ref`
+- `input/`: `pointer-router`, `keyboard`
+- `ui/`: `external-change`, `export-modal`, `insert-page-modal`, `reading-mode`, `shortcuts-editor`, `popovers`, `focus-trap`
+
+The module-level `_viewport` is replaced by `app/viewport-ref.js` (`getViewport`/`setViewport`), set right after the ViewportManager is built and before `attachListeners`, since its callback calls the popovers. Every `window.*` hook the tests use is unchanged.
+
+*Not done as specified:* `registerCoreCommands` (~475 lines) and `bindAllUIEvents` (~730 lines) moved whole rather than split by domain, and `main.js` is 480 lines, not under 400 (the startup block alone is ~440). Splitting them further is a mechanical follow-up with no behaviour risk; it wasn't needed for 090/092.
+
+**Proof of behaviour-neutrality.**
+- A line-multiset diff of old vs new for both files shows only module headers, imports, `export`/`pub(super)` keywords, and the viewport swap.
+- All 13 standalone scripts were run on the pre-split commit and on the split tree. Run sequentially, the results are identical. Two scripts differed only under parallel CPU load and match when rerun alone.
+
+**Dead code.** Deleted `inkwell-pdf/src/text_embed.rs` and `images.rs` (PDFium embedding paths unused by the app). The one test that used `embed_texts_in_pdf` is replaced by `saved_sticky_note_text_is_readable_by_pdfium`: a note saved through the real writer, read back from `/Contents` by PDFium's annotation API.
+
+**Stray test scripts (triage).** With the system Chromium:
+- **Pass and are now in Linux CI:** `test_lasso_selection` (16/16), `test_insert_page_dialog`, `test_palette_dismissal`, `test_resize_no_black_hole`, `test_viewport_and_pressure`. Three of them wrote screenshots to a hard-coded `~/.gemini/antigravity/brain/...` path and would have crashed in CI. Those debug screenshots are removed.
+- **Fail before and after the split** (not run in CI; triage is a follow-up):
+  - `test_adversarial_m3` 21/25: mid-stroke tool change, space jitter quick-toggle, ±20 px touch-target hit-testing, console errors.
+  - `test_app_adversarial_stress` 17/19: 10-tap space burst, console errors.
+  - `test_image_copypaste` 17/18 **(runs in Windows CI)**: console error `fetchTile … Invalid tile buffer: expected 247500 RGBA bytes (495x125), got 592896`.
+  - `test_m1_adversarial` 34/37: out-of-bounds text-selection clamping left/right, page errors.
+  - `test_m1_challenger_stress` 32/36: spring key `e` restore, space hold without pan, empty search query, console errors.
+  - `test_m1_interactive` 20/24: three space-toggle expectations, console errors.
+  - `test_m2_touch_a11y` 31/39: seven buttons reported missing `:focus-visible` ring rules, tile-buffer console error.
+  - `test_m1_iter2_challenger_deep`: text-selection drag/double/triple-click checks fail, then a 30 s click timeout.
+  - The recurring tile-buffer error (fixed-size mock tile vs requested size), the space-toggle expectations (spring-key logic changed in Plan 076) and the `:focus-visible` reports (AGENTS.md rule 6) need a decision each: real bug, or stale test.
+
+**Docs.**
+- AGENTS.md directory map rewritten: no `inkwell-wal` crate; core/pdf module lists; `commands/` and the `js/app` / `js/input` layout. Rule 4 now names the real WAL location. New verification rows for the focused suites and the boundary linter.
+- README architecture tree, WAL bullet and check count (126 → 154) fixed.
+- PROJECT.md title, paths and an M7 row for this wave.
+- `HANDOFF.md` and `CODEX_HANDOFF.md` moved to `docs/archive/` with a "historical" header.
+- Repo-root artefacts (`uihi.pdf`, `args.gn`, `PDFiumConfig.cmake`, `pdfium.tgz`, the Bangla textbook) are untracked local files, so there was nothing to remove. `inkwell-capture.json` is tracked and used by M0 and Plan 094.
+
+**Verification.** Rust 118/118, strict conformance + render diff, app crate 15/15, clippy clean on both workspaces, module boundaries clean, smoke 154/154, the five focused suites pass.

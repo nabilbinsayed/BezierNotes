@@ -79,7 +79,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 - **New Digital Notebooks (`Ctrl+N`):** Instant creation of clean, vector-native digital notebooks with paper templates (blank, lined, grid).
 - **Dual-Pane Split View (`Ctrl+\`):** Side-by-side study workspace—read a textbook or lecture slides in the left pane while taking handwritten notes on the right, each with independent pan and zoom.
 - **Append-Only Incremental Save:** BezierNotes preserves the original PDF bytes, appending updated xref tables and objects so base documents are never corrupted in-place.
-- **Temp-Dir WAL Crash Durability:** System temporary directory Write-Ahead Logging (`inkwell-wal`) commits every stroke with immediate `fsync`, effortlessly recovering unsaved work after crashes without thrashing cloud sync folders.
+- **Local WAL Crash Durability:** A per-user, out-of-sync-folder Write-Ahead Log (`inkwell-core/src/wal.rs`) commits every stroke with immediate `fsync`, effortlessly recovering unsaved work after crashes without thrashing cloud sync folders.
 - **Hierarchical Table of Contents & Bookmarks:** Recursive PDF outline extraction with collapsible tree navigation and direct page jumps.
 - **Instant Page Loading:** Page boxes are read with PDFium's fast `FPDF_GetPageSizeByIndexF` API (a 33-page textbook dropped from ~765 ms to ~1.6 ms of metadata work), clean PDFs skip sidecar parsing entirely, and the next two page bitmaps are prefetched in the background so scrolling does not wait on rasterization.
 - **Annotation Review & Audit (`Ctrl+Shift+A`):** Page-grouped list of every ink stroke, highlight, text note, image, signature and stamp with type filters, full-text search, click-to-jump selection, undoable delete, and one-click Markdown summary export for Obsidian, Notion or email.
@@ -122,12 +122,14 @@ Pre-compiled standalone packages and installers are available directly on the **
 ```
 InkWell/
 ├── inkwell/                      # Core Rust Workspace
-│   ├── crates/inkwell-core/      # Document model, vector geometry (Cubic Bézier ribbons, RDP), WAL engine, spatial index
-│   ├── crates/inkwell-pdf/       # PDFium bindings, outline extraction, LOD tile rasterizer, PDF parser & xref normaliser
-│   └── crates/inkwell-wal/       # Append-only Write-Ahead Log journal with crash recovery & FNV-1a checksums
+│   ├── crates/inkwell-core/      # Document model, ink geometry, PDF writer & xref/object-stream reader, text shaping, WAL
+│   └── crates/inkwell-pdf/       # PDFium: LOD tile rasterizer, text extraction & search, outline, damaged-file repair
 ├── inkwell-app/                  # Desktop Application Host (Tauri v2)
-│   ├── src-tauri/                # IPC commands, application state, Linux evdev stylus thread, window management
+│   ├── src-tauri/                # IPC commands (commands/ by area), application state, Linux evdev stylus thread
 │   └── src/                      # Frontend UI & interaction engine
+│       ├── js/main.js            # Startup only
+│       ├── js/app/               # Command registration, UI bindings, document loading
+│       ├── js/input/             # Pointer/pen/touch and keyboard routing
 │       ├── js/core/              # State store, document mutations, history, IPC bindings
 │       ├── js/ink.js             # Dual-canvas wet/dry engine, One-Euro filter, Bézier ribbon generator
 │       ├── js/viewport.js        # Continuous coordinate layout, split-pane transforms, zoom & pan
@@ -136,7 +138,8 @@ InkWell/
 │       ├── js/workspace/         # Text selection, navigation, search drawer, scrollbar
 │       └── js/ui/                # Radial menu, command palette, toast notifications, modals
 ├── inkwell-m0/                   # Playwright smoke test harness & synthetic CDP pen simulation
-└── tools/                        # Multi-engine PDF standards validation scripts (Poppler, MuPDF, PyPDF)
+├── scripts/                      # Setup and the kill -9 save torture test
+└── tools/                        # Fixture and font generators, module-boundary linter
 ```
 
 ---
@@ -249,7 +252,7 @@ cargo clippy --all-targets
 
 # 3. Run production desktop frontend smoke suite
 cd inkwell-app
-py -3 test_app_smoke.py     # 126 desktop checks
+py -3 test_app_smoke.py     # 154 desktop checks
 ```
 
 ---

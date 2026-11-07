@@ -1,16 +1,12 @@
-pub mod images;
 pub mod normalise;
 pub mod outline;
 pub mod rasterizer;
 pub mod text;
-pub mod text_embed;
 
-pub use images::{embed_images_in_pdf, ImageAnnotation};
 pub use normalise::normalise;
 pub use outline::{extract_outline, TocItem};
 pub use rasterizer::PdfiumRasterizer;
 pub use text::{extract_text, extract_text_spans, extract_page_text_data, TextSpan, CharSpan, TextLine, PageTextData};
-pub use text_embed::{embed_texts_in_pdf, TextAnnotation};
 
 // Re-export core PDFium types so dependents don't need a direct pdfium_render dependency.
 pub use pdfium_render::prelude::{Pdfium, PdfiumError};

@@ -278,45 +278,44 @@ fn test_color_fidelity() {
 }
 
 #[test]
-fn saved_sticky_note_survives_round_trip() {
+fn saved_sticky_note_text_is_readable_by_pdfium() {
+    // Since Plan 089 a note's appearance is glyph outlines, so its text is
+    // not page content; readers find it in the FreeText annotation's
+    // /Contents. Save through the real writer and read it back via PDFium.
     let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
     let pdfium = match init_pdfium() {
         Ok(p) => p,
         Err(_) => return,
     };
+    let original_bytes = std::fs::read(get_fixture_path()).expect("read fixture");
 
-    let fixture_path = get_fixture_path();
-    let original_bytes = std::fs::read(&fixture_path).expect("read fixture");
+    let mut d = inkwell_core::Document::for_pdf(1);
+    d.upsert_text(
+        0,
+        inkwell_core::doc::TextObject {
+            id: "txt_sticky".into(),
+            sheet: 0,
+            x: 100.0,
+            y: 100.0,
+            text: "InkWell note sticky text বাংলা".into(),
+            font_size: 16.0,
+            color: "#141724".into(),
+            bold: false,
+            italic: false,
+            width: 200.0,
+            height: 24.0,
+        },
+    );
+    let mut f = PdfFile::open(original_bytes).expect("open fixture");
+    f.write_document(&d, inkwell_core::pdf::DEFAULT_GROUP).expect("write note");
+    let saved = f.finish();
 
-    let note = inkwell_pdf::TextAnnotation {
-        sheet: 0,
-        x: 100.0,
-        y: 100.0,
-        text: "InkWell note sticky text".to_string(),
-        font_size: 16.0,
-        color: "#141724".to_string(),
-        bold: false,
-        italic: false,
-    };
-
-    let embedded_bytes = inkwell_pdf::embed_texts_in_pdf(&pdfium, &original_bytes, &[note])
-        .expect("embed_texts_in_pdf should succeed");
-
-    assert!(PdfFile::open(embedded_bytes.clone()).is_ok(), "Embedded PDF must open cleanly in PdfFile");
-
-    let doc = pdfium.load_pdf_from_byte_slice(&embedded_bytes, None).expect("load embedded PDF");
-    let extracted = extract_text(&doc, 0).expect("extract text from page 0");
+    let doc = pdfium.load_pdf_from_byte_slice(&saved, None).expect("load saved PDF");
+    let page = doc.pages().get(0).expect("page 0");
+    use pdfium_render::prelude::PdfPageAnnotationCommon;
+    let contents: Vec<String> = page.annotations().iter().filter_map(|a| a.contents()).collect();
     assert!(
-        extracted.contains("InkWell note sticky text"),
-        "Extracted text should contain the embedded sticky note text"
+        contents.iter().any(|c| c == "InkWell note sticky text বাংলা"),
+        "PDFium should read the note text from /Contents, got {contents:?}"
     );
 }
-
-
-
-
-
-
-
-
-

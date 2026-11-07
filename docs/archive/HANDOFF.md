@@ -1,3 +1,5 @@
+> **Historical document.** Superseded by `PROJECT.md`, `AGENTS.md` and `plans/README.md`; kept for context only. Archived by Plan 093 (2026-11).
+
 # HANDOFF.md — Inkwell
 
 **Read this file completely before writing any code.**

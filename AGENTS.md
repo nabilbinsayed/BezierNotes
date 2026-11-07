@@ -6,12 +6,12 @@ Read this before making changes to the InkWell codebase.
 
 ## Subsystem Directory Map
 
-- `inkwell/`: Core Rust workspace (`inkwell-core`, `inkwell-pdf`, `inkwell-wal`)
-  - `crates/inkwell-core/`: Document model, ink mathematics (One-Euro filter, RDP, ribbon outline generation), Write-Ahead Log engine (`wal.rs`), tile cache (`tiles.rs`).
-  - `crates/inkwell-pdf/`: Low-level PDF parser (`pdf.rs`), object structure (`pdfobj.rs`), PDFium bindings and normalisation engine (`pdfium.rs`).
+- `inkwell/`: Core Rust workspace (`inkwell-core`, `inkwell-pdf`; there is no separate WAL crate)
+  - `crates/inkwell-core/`: Document model (`doc.rs`), ink mathematics (One-Euro filter, RDP, ribbon outline generation, `ink.rs`), sidecar codec (`codec.rs`), the PDF writer (`pdf.rs`) with its byte-level reader (`pdfobj.rs`) and xref/object-stream index (`xref.rs`), text-note glyph shaping (`text_shape.rs`, fonts in `fonts/`), Write-Ahead Log engine (`wal.rs`), tile cache (`tiles.rs`).
+  - `crates/inkwell-pdf/`: PDFium integration: tile rasteriser (`rasterizer.rs`), text extraction and search (`text.rs`), outline (`outline.rs`), repair of damaged files (`normalise.rs`).
 - `inkwell-app/`: Desktop application host (Tauri v2 + frontend UI)
-  - `src-tauri/`: Tauri backend IPC commands (`commands.rs`), application state (`state.rs`), and entry point (`main.rs`).
-  - `src/`: Web frontend UI (`index.html`, `styles.css`, `js/core/`, `js/tools/`, `js/render/`, `js/ui/`, `js/workspace/`, `js/main.js`).
+  - `src-tauri/`: Tauri IPC commands in `commands/` (one module per area: `open`, `render`, `ink`, `save`, `export`, `pages`, `text`, `session`, `window`; shared DTOs and helpers in `mod.rs`), application state (`state.rs`), Linux stylus thread (`stylus_linux.rs`), and entry point (`main.rs`, the single command registration list).
+  - `src/`: Web frontend UI (`index.html`, `styles.css`). `js/main.js` is startup only; `js/app/` holds command registration, UI bindings, document loading and the viewport reference; `js/input/` holds pointer and keyboard routing; plus `js/core/`, `js/tools/`, `js/render/`, `js/ui/`, `js/workspace/`. `tools/lint_boundaries.js` enforces that `core/` imports nothing from the other layers.
 - `inkwell-m0/`: M0 latency spike prototype and Playwright smoke tests (`test_smoke.py`).
 - `plans/`: Implementation plans and execution tracking (`README.md`).
 
@@ -20,7 +20,7 @@ Read this before making changes to the InkWell codebase.
 1. **Strict PDF Standards Compliance**: All output must be valid, standard PDF files. Ink layers are appended as vector filled ribbon outlines (`ribbon_outline`), never simple stroked lines or binary sidecar files.
 2. **Append-Only Incremental Save**: Original PDF bytes must never be corrupted or overwritten in-place. `atomic_write` and append-only incremental PDF structures preserve base document integrity.
 3. **No Underlay Rasterisation at Import**: PDFs are vector-rendered on demand per LOD tile. Never rasterise the base PDF into bitmaps on document load.
-4. **WAL Journal Durability**: Write-Ahead Log (`inkwell-wal`) entries are fsynced immediately upon stroke commit. WAL journals reside in system temporary directories, staying out of cloud sync folders to prevent sync thrashing.
+4. **WAL Journal Durability**: Write-Ahead Log (`inkwell-core/src/wal.rs`) entries are fsynced immediately upon stroke commit. WAL journals reside in local per-user directories (`$XDG_STATE_HOME` on Linux, `%TEMP%` on Windows), staying out of cloud sync folders to prevent sync thrashing.
 5. **No Synthetic Delay or Swallowed Errors**: Always trace error root causes. Do not wrap critical failures in empty try/catch blocks or return silent dummy fallbacks.
 6. **Maintain Touch Target & Accessibility Guidelines**: Minimum interactive target dimensions must satisfy touch guidelines (44x44px), with clear focus indicators and glassmorphic toast notifications for user feedback.
 
@@ -34,4 +34,6 @@ Read this before making changes to the InkWell codebase.
 | PDF Conformance (strict) | `cd inkwell; BEZIER_CONFORMANCE_STRICT=1 cargo test -p inkwell-pdf --test conformance --test render_diff` | exit 0; needs `qpdf`, `gs`, PDFium. Known defects live in `KNOWN_FAILURES` (a ratchet: delete an entry when its fix lands; empty since Plan 088) |
 | Golden Snapshots | `cd inkwell; cargo test -p inkwell-core --test golden` | exit 0; after an intentional format change run with `UPDATE_GOLDEN=1` and review the diff |
 | Crash Torture | `scripts/torture_save.sh 200` | `0 unopenable` |
+| Focused Regression Suites | `cd inkwell-app; for t in test_lasso_selection test_insert_page_dialog test_palette_dismissal test_resize_no_black_hole test_viewport_and_pressure; do py -3 $t.py; done` | each exits 0. The other standalone `test_*.py` scripts have known failing checks, listed in `plans/093-…`; they are not run in CI |
+| Module Boundaries | `node tools/lint_boundaries.js` | zero violations |
 | M0 Prototype Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass (prototype only) |

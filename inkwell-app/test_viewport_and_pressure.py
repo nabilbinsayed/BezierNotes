@@ -172,10 +172,6 @@ def test_viewport_and_pressure():
         print(f"Native evdev test result: {native_pressure_test}")
         assert native_pressure_test['toolAccessor'] and native_pressure_test['pressureAccessor'] and native_pressure_test['resetAccessor']
 
-        screenshot_path = "/home/nboss/.gemini/antigravity/brain/da105d4a-b8d2-4333-9ad3-55797f4a1b0b/test_viewport_pressure_verified.png"
-        pg.screenshot(path=screenshot_path)
-        print(f"Saved visual verification screenshot to {screenshot_path}")
-
         assert len(errors) == 0, f"Encountered JS errors: {errors}"
         print("\nALL VERIFICATION CHECKS PASSED WITH ZERO REGRESSIONS!")
 

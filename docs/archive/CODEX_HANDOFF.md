@@ -1,3 +1,5 @@
+> **Historical document.** Superseded by `PROJECT.md`, `AGENTS.md` and `plans/README.md`; kept for context only. Archived by Plan 093 (2026-11).
+
 # Codex (GPT 5.6 Terra High) Handoff & Modular Prompt Guide
 
 > [!IMPORTANT]

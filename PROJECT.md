@@ -1,4 +1,4 @@
-# Project: InkWell Full Optimization, Tool Repair & Cross-Platform Stability
+# Project: BezierNotes (InkWell codebase)
 
 Product name: BezierNotes (crate/folder names keep the `inkwell` prefix)
 
@@ -8,9 +8,8 @@ The architecture is partitioned into:
 1. **Core Rust Workspace (`inkwell/crates/`)**:
    - `inkwell-core`: Document model, ink math (One-Euro filter, Streamline, RDP simplification, ribbon outline generation), Write-Ahead Log engine (`wal.rs`), spatial AABB bounding box indexing (`spatial.rs`), tile cache (`tiles.rs`), and binary `IWSC` codec.
    - `inkwell-pdf`: Low-level PDF parser (`pdf.rs`), object structure (`pdfobj.rs`), PDFium dynamic normalisation engine (`pdfium.rs`, `text.rs`).
-   - `inkwell-wal`: Durable transaction journal with FNV-1a checksums and atomic sibling replacement.
 2. **Desktop Application Host (`inkwell-app/`)**:
-   - `src-tauri/`: Tauri v2 IPC commands (`commands.rs`), application state (`state.rs`), Linux evdev stylus thread (`stylus_linux.rs`), and entry point (`main.rs`).
+   - `src-tauri/`: Tauri v2 IPC commands (`commands/`, one module per area), application state (`state.rs`), Linux evdev stylus thread (`stylus_linux.rs`), and entry point (`main.rs`).
    - `src/`: Web frontend UI:
      - `index.html`, `styles.css`
      - `js/core/`: `state.js`, `document.js`, `ipc.js`, `commands.js`
@@ -18,7 +17,9 @@ The architecture is partitioned into:
      - `js/render/`: `compositor.js`, `tiles.js`, `overlays.js`, `templates.js`, `ink.js`
      - `js/ui/`: `radial-menu.js`, `command-palette.js`, `context-menu.js`, `toast.js`, `dialogs.js`
      - `js/workspace/`: `viewport.js`, `text-selection.js`, `search.js`, `outline.js`, `thumbnails.js`, `tabs.js`
-     - `js/main.js`: Event routing, pointer event handlers, keyboard shortcuts, and startup coordination.
+     - `js/main.js`: Startup coordination only.
+     - `js/app/`: `commands-registry.js`, `ui-bindings.js`, `document-loading.js`, `viewport-ref.js`
+     - `js/input/`: `pointer-router.js` (pointer/pen/touch routing, panning), `keyboard.js` (shortcuts, spring keys)
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
@@ -65,6 +66,7 @@ The architecture is partitioned into:
 | M4 | Review, Signing, Presentation & Smoothness | Annotation review, signature/stamp studio, presentation mode, lazy thumbnails, interaction polish (F19-F23) | M1-M3 | DONE |
 | M5 | Instant Document Loading | Profiled and removed PDF open-path stalls; first page + adjacent-page prefetch (F24) | M1-M4 | DONE |
 | M6 | Extreme Smoothness & Evolution | Non-blocking compositor with offscreen dry cache, incremental wet-stroke chunking, zero-copy tile/text pipeline, AABB hit-testing, hold-to-snap shapes, partial vector eraser, smart PDF export and an external-change guard (F25-F32) | M1-M5 | DONE |
+| M7 | Format Integrity, Multi-Device Merge & v1.0 | Wave 087–098 (see `plans/README.md`): conformance harness, native xref-stream saves with bounded growth, Unicode text notes, decomposition, spec autosave, CRDT sidecar and conflict-copy merge, latency gate, v1.0 release; then parametric shapes, AcroForms, infinite canvas | M1-M6 | IN PROGRESS (087–089, 093 done) |
 
 ## Interface Contracts
 ### `toolManager` ↔ `state`
@@ -82,7 +84,7 @@ The architecture is partitioned into:
 - Filter characters by `c.char_index >= minIdx && c.char_index <= maxIdx`.
 - `overlays.drawPersistentTextSelectionHighlights(_dctx, viewport)`: iterates `state.textSelection.rects` and fills selection rects.
 
-### `viewport` ↔ `main.js` (Canvas Panning)
+### `viewport` ↔ `input/pointer-router.js` (Canvas Panning)
 - When `state.activeTool === 'pan'`, on pointerdown: record start screen coordinates and current viewport pan.
 - On pointermove: calculate delta, invoke `viewport.setPan(newPanX, newPanY, pane)`.
 - Mark `state.spaceDidPan = true` if panning occurred.
@@ -90,7 +92,6 @@ The architecture is partitioned into:
 ## Code Layout
 - `inkwell/crates/inkwell-core/`: Core mathematical and document algorithms
 - `inkwell/crates/inkwell-pdf/`: PDFium binding and text layer extraction
-- `inkwell/crates/inkwell-wal/`: Write-ahead log durability
 - `inkwell-app/src-tauri/`: Tauri v2 host backend
 - `inkwell-app/src/`: Frontend UI & interaction engine
   - `src/index.html`: Main markup, toolbars, radial menus, popovers, modals
@@ -102,5 +103,5 @@ The architecture is partitioned into:
   - `src/js/ui/radial-menu.js`: Circular quick-access tool palette
   - `src/js/ui/command-palette.js`: Command palette modal with keyboard navigation
   - `src/js/ui/context-menu.js`: Canvas context menu
-  - `src/js/main.js`: Main event orchestration and pointer handlers
+  - `src/js/main.js`: Startup coordination (event wiring lives in `js/app/` and `js/input/`)
 - `inkwell-app/test_app_smoke.py`: Playwright smoke test suite

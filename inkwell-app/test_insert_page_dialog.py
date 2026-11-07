@@ -35,7 +35,6 @@ def run_tests():
 
         print("\n=== D1: Open Insert Page Modal ===")
         page.click("#btnHeaderAddPage")
-        page.screenshot(path="/home/nboss/.gemini/antigravity/brain/6676519c-ff0b-4674-a797-09e7a4c1dd7f/insert_page_dialog.png")
         is_open = page.evaluate("!document.getElementById('insertPageModal').classList.contains('hidden')")
         check("Insert Page modal opens on header add page click", is_open)
 
