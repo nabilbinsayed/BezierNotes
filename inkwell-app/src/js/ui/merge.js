@@ -18,6 +18,7 @@ import * as documentOps from '../core/document.js';
 import * as toast from './toast.js';
 import * as commandsModule from '../core/commands.js';
 import * as shapesModel from '../core/shapes-model.js';
+import * as forms from '../workspace/forms.js';
 
 /** Incoming ink stays highlighted this long after a merge. */
 export const HIGHLIGHT_MS = 2000;
@@ -247,6 +248,8 @@ export async function applyPendingMerge() {
     })),
   }, { label: 'Merge' });
   highlightIncoming(res.incoming_stroke_ids || []);
+  // merged form values (Plan 096) come back through the form overlay
+  forms.loadForm();
   if (typeof onApplied === 'function') onApplied(res);
   if (typeof window.__inkwellAfterMerge === 'function') window.__inkwellAfterMerge(res);
 

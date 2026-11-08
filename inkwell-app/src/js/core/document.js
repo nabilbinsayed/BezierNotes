@@ -918,6 +918,10 @@ export function performUndo() {
     applyAnnotations(tx.before);
     history.pushRedo(tx);
     notifyMutation('undo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'form_value') {
+    // Plan 096: the form overlay applies and journals it (main.js listener)
+    history.pushRedo(tx);
+    notifyMutation('undo_form_value', { name: tx.name, value: tx.before });
   } else if (tx.type === 'restyle_shapes') {
     for (const it of tx.items) applyShapeStyle(it.stroke, it.before);
     history.pushRedo(tx);
@@ -1060,6 +1064,9 @@ export function performRedo() {
     applyAnnotations(tx.after);
     history.pushUndoRaw(tx);
     notifyMutation('redo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'form_value') {
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_form_value', { name: tx.name, value: tx.after });
   } else if (tx.type === 'restyle_shapes') {
     for (const it of tx.items) applyShapeStyle(it.stroke, it.after);
     history.pushUndoRaw(tx);

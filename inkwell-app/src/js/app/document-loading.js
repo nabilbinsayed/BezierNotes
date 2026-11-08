@@ -15,6 +15,7 @@ import * as drawers from '../ui/drawers.js';
 import { getViewport } from '../app/viewport-ref.js';
 import { checkForConflictCopies } from '../ui/merge.js';
 import * as shapesModel from '../core/shapes-model.js';
+import * as forms from '../workspace/forms.js';
 
 export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations = false } = {}) {
   if (!res) { hideOpenProgress(); return; }
@@ -91,6 +92,10 @@ export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations =
       { actions: [{ label: 'Restore them', onClick: () => restoreShelvedChanges(title, pathStr) }] },
     );
   }
+
+  // The PDF's own form fields (Plan 096).
+  if (pathStr) setTimeout(() => { forms.loadForm(); }, 300);
+  else forms.clearForm();
 
   // Conflict copies left by a sync client (Plan 092): offered, never merged silently.
   if (pathStr) setTimeout(() => { checkForConflictCopies(); }, 600);

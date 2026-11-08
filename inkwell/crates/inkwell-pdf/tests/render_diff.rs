@@ -20,6 +20,9 @@ use inkwell_pdf::{init_pdfium, normalise, Pdfium};
 use pdfium_render::prelude::*;
 
 const DPI: f64 = 72.0;
+
+/// PDFium is not thread-safe: tests in this file take turns with it.
+static PDFIUM: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Per-pixel grey-level change that counts as "ink here".
 const INK_DELTA: i32 = 48;
 /// Minimum agreement between renderers' ink masks.
@@ -201,6 +204,7 @@ fn iou(a: &[bool], b: &[bool], w: usize, h: usize) -> f64 {
 
 #[test]
 fn ink_renders_the_same_in_pdfium_and_ghostscript() {
+    let _pdfium_turn = PDFIUM.lock().unwrap_or_else(|e| e.into_inner());
     let has_gs = Command::new("gs").arg("--version").output().is_ok_and(|o| o.status.success());
     let pdfium = init_pdfium().ok();
     let (true, Some(pdfium)) = (has_gs, pdfium) else {
@@ -232,3 +236,53 @@ fn ink_renders_the_same_in_pdfium_and_ghostscript() {
     }
 }
 
+
+/// Plan 096 STOP condition: a filled field must never look blank. Fill every
+/// kind in the fixture form and require new ink inside each filled widget in
+/// both PDFium and Ghostscript.
+#[test]
+fn filled_form_fields_show_in_pdfium_and_ghostscript() {
+    let _pdfium_turn = PDFIUM.lock().unwrap_or_else(|e| e.into_inner());
+    let has_gs = Command::new("gs").arg("--version").output().is_ok_and(|o| o.status.success());
+    let pdfium = init_pdfium().ok();
+    let (true, Some(pdfium)) = (has_gs, pdfium) else {
+        assert!(!strict(), "form render check needs gs and PDFium (BEZIER_CONFORMANCE_STRICT=1)");
+        eprintln!("WARNING form render check skipped");
+        return;
+    };
+    let base = fixture("forms/all_fields.pdf");
+    let mut d = Document::for_pdf(1);
+    for (k, v) in [("name", "নমস্কার Ada"), ("notes", "line one\nline two"), ("zip", "12345"), ("agree", "Yes"),
+                   ("size", "Large"), ("country", "jp"), ("colour", "Green"), ("city", "Dhaka")] {
+        d.form_values.insert(k.into(), v.into());
+    }
+    let out = save(&pdfium, &base, &d);
+    let fields = PdfFile::open(out.clone()).unwrap().form_fields().fields;
+    let page_h = 792.0;
+    for (label, before, after) in [
+        ("pdfium", render_pdfium(&pdfium, &base), render_pdfium(&pdfium, &out)),
+        ("gs", render_gs(&base), render_gs(&out)),
+    ] {
+        for f in fields.iter().filter(|f| d.form_values.contains_key(&f.name)) {
+            for w in &f.widgets {
+                // the radio widget that stays off is meant to stay blank
+                if f.kind == inkwell_core::forms::FieldKind::Radio && w.on_state.as_deref() != Some("Large") {
+                    continue;
+                }
+                let (x0, x1) = (w.rect[0] as usize + 1, (w.rect[2] as usize).saturating_sub(1));
+                let (y0, y1) = ((page_h - w.rect[3]) as usize + 1, ((page_h - w.rect[1]) as usize).saturating_sub(1));
+                let mut changed = 0;
+                for y in y0..y1.min(before.h).min(after.h) {
+                    for x in x0..x1.min(before.w).min(after.w) {
+                        let (a, b) = (before.px[y * before.w + x] as i32, after.px[y * after.w + x] as i32);
+                        if a - b > INK_DELTA {
+                            changed += 1;
+                        }
+                    }
+                }
+                eprintln!("{label}: {} ink px", f.name);
+                assert!(changed >= 6, "{label}: field {} looks blank after filling ({changed} px)", f.name);
+            }
+        }
+    }
+}

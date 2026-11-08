@@ -48,6 +48,7 @@
 pub mod clock;
 pub mod codec;
 pub mod doc;
+pub mod forms;
 pub mod ink;
 pub mod merge;
 pub mod pdf;

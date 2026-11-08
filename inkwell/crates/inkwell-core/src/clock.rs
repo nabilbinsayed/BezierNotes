@@ -62,6 +62,8 @@ pub enum ObjectId {
     Bookmark(String),
     Page(u128),
     Shape(String),
+    /// A PDF form field, by fully qualified name (Plan 096).
+    Field(String),
 }
 
 impl fmt::Display for ObjectId {
@@ -73,6 +75,7 @@ impl fmt::Display for ObjectId {
             ObjectId::Bookmark(id) => write!(f, "b:{id}"),
             ObjectId::Page(id) => write!(f, "p:{id:032x}"),
             ObjectId::Shape(id) => write!(f, "h:{id}"),
+            ObjectId::Field(name) => write!(f, "f:{name}"),
         }
     }
 }
@@ -89,6 +92,7 @@ impl std::str::FromStr for ObjectId {
             "b" => ObjectId::Bookmark(rest.to_string()),
             "p" => ObjectId::Page(hex(rest)?),
             "h" => ObjectId::Shape(rest.to_string()),
+            "f" => ObjectId::Field(rest.to_string()),
             _ => return Err(format!("bad object id {s:?}")),
         })
     }

@@ -145,6 +145,8 @@ fn main() {
             commands::save::save_pdf,
             commands::merge::find_conflict_siblings,
             commands::ink::journal_shape_mutation,
+            commands::forms::get_form_fields,
+            commands::forms::set_form_value,
             commands::merge::preview_merge,
             commands::merge::apply_merge,
             commands::merge::trash_conflict_copy,

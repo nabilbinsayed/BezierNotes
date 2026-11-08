@@ -104,6 +104,8 @@ enum ObjRef<'d> {
     Text(&'d TextObject),
     Bookmark(&'d Bookmark),
     Shape(&'d ShapeObject),
+    /// A form field value (no page).
+    Field(&'d str, &'d str),
 }
 
 #[derive(Clone, Copy)]
@@ -163,6 +165,9 @@ fn collect<'d>(doc: &'d Document, side: Side) -> Result<HashMap<ObjectId, Versio
             put(ObjectId::Shape(s.id.clone()), p, 0, hi, ObjRef::Shape(s))?;
         }
     }
+    for (fi, (name, value)) in doc.form_values.iter().enumerate() {
+        put(ObjectId::Field(name.clone()), 0, 0, fi, ObjRef::Field(name, value))?;
+    }
     for (bi, b) in doc.bookmarks.iter().enumerate() {
         // Bookmarks point at a page index; carry the page's identity instead.
         let page = doc.sheets.get(b.page).map(|s| s.page_id).unwrap_or(0);
@@ -179,6 +184,7 @@ fn summary(v: &Version<'_>) -> String {
         ObjRef::Stroke(_) => "ink moved or restyled".into(),
         ObjRef::Image(_) => "image moved or resized".into(),
         ObjRef::Shape(_) => "shape moved or restyled".into(),
+        ObjRef::Field(_, v) => v.to_string(),
     }
 }
 
@@ -300,6 +306,9 @@ pub fn merge(ours: &Document, theirs: &Document) -> Result<MergeResult, MergeErr
                 let mut t = t.clone();
                 t.sheet = pi;
                 doc.sheets[pi].text_objects.push(t);
+            }
+            ObjRef::Field(name, value) => {
+                doc.form_values.insert(name.to_string(), value.to_string());
             }
             ObjRef::Shape(sh) => {
                 let pi = pi.expect("a live object's page is live");

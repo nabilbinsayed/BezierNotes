@@ -171,13 +171,14 @@ fn kind_of(id: &ObjectId) -> &'static str {
         ObjectId::Bookmark(_) => "bookmark",
         ObjectId::Page(_) => "page",
         ObjectId::Shape(_) => "shape",
+        ObjectId::Field(_) => "form field",
     }
 }
 
 fn plain_id(id: &ObjectId) -> String {
     match id {
         ObjectId::Stroke(s) | ObjectId::Page(s) => format!("{s:032x}"),
-        ObjectId::Image(s) | ObjectId::Text(s) | ObjectId::Bookmark(s) | ObjectId::Shape(s) => s.clone(),
+        ObjectId::Image(s) | ObjectId::Text(s) | ObjectId::Bookmark(s) | ObjectId::Shape(s) | ObjectId::Field(s) => s.clone(),
     }
 }
 
@@ -188,7 +189,7 @@ fn page_of(doc: &Document, id: &ObjectId) -> Option<usize> {
         ObjectId::Text(t) => sh.text_objects.iter().any(|x| &x.id == t),
         ObjectId::Page(p) => sh.page_id == *p,
         ObjectId::Shape(s) => sh.shapes.iter().any(|x| &x.id == s),
-        ObjectId::Bookmark(_) => false,
+        ObjectId::Bookmark(_) | ObjectId::Field(_) => false,
     })
 }
 

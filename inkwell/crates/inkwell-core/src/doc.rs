@@ -211,6 +211,10 @@ pub struct Document {
     pub clocks: BTreeMap<ObjectId, ObjClock>,
     #[serde(default)]
     pub tombstones: BTreeMap<ObjectId, Tombstone>,
+    /// Values the user gave the PDF's own form fields (Plan 096), by fully
+    /// qualified field name. Only fields the user touched are listed.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub form_values: BTreeMap<String, String>,
     /// Content hashes of every object as last loaded or stamped; what
     /// `restamp` diffs against. A cache, not document state.
     #[serde(skip)]
@@ -240,6 +244,7 @@ impl Default for Document {
             peers: BTreeMap::new(),
             clocks: BTreeMap::new(),
             tombstones: BTreeMap::new(),
+            form_values: BTreeMap::new(),
             known: Known::default(),
         }
     }
@@ -574,6 +579,11 @@ impl Document {
                 out.insert(ObjectId::Shape(s.id.clone()), shape_hash(p, s));
             }
         }
+        for (name, value) in &self.form_values {
+            let mut h = Fnv::new();
+            h.bytes(value.as_bytes());
+            out.insert(ObjectId::Field(name.clone()), h.finish());
+        }
         for b in &self.bookmarks {
             let page = self.sheets.get(b.page).map_or(0, |s| s.page_id);
             out.insert(ObjectId::Bookmark(b.id.clone()), bookmark_hash(page, b));
@@ -884,6 +894,11 @@ pub fn encode_sidecar(doc: &Document) -> Vec<u8> {
         "tombstones": doc.tombstones,
         "stroke_clock_devices": devices,
     });
+    // only when present, so documents without form values encode as before
+    let mut skeleton = skeleton;
+    if !doc.form_values.is_empty() {
+        skeleton["form_values"] = serde_json::json!(doc.form_values);
+    }
     let json = serde_json::to_vec(&skeleton).expect("skeleton is serialisable");
     let payload = codec::encode(&strokes.into_iter().cloned().collect::<Vec<_>>());
 
@@ -942,6 +957,7 @@ pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError>
         peers: json_field(&sk, "peers")?,
         clocks,
         tombstones: json_field(&sk, "tombstones")?,
+        form_values: json_field(&sk, "form_values")?,
         known: Known::default(),
     };
 

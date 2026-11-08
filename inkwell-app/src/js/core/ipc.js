@@ -159,6 +159,16 @@ export async function journalShapeMutation(op, shape, shapeId = null) {
   });
 }
 
+/** The open PDF's form fields (Plan 096). */
+export async function getFormFields() {
+  return await invokeTauri('get_form_fields', {});
+}
+
+/** Set a form field's value (journalled; written into the PDF at the next save). */
+export async function setFormValue(name, value) {
+  return await invokeTauri('set_form_value', { name, value, seq: nextJournalSeq() });
+}
+
 /** Ask the backend's FlushPolicy whether to autosave now; returns a reason or null. */
 export async function autosaveTick(dirty, sinceInputS, sinceFlushS, focusLost) {
   return await invokeTauri('autosave_tick', { dirty, sinceInputS, sinceFlushS, focusLost });

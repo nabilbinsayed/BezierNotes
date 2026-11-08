@@ -8,6 +8,7 @@ import * as commandsModule from './core/commands.js';
 import * as documentOps from './core/document.js';
 import * as ipc from './core/ipc.js';
 import * as latencyModule from './dev/latency.js';
+import * as forms from './workspace/forms.js';
 import * as compositor from './render/compositor.js';
 import * as tiles from './render/tiles.js';
 import * as overlays from './render/overlays.js';
@@ -55,6 +56,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       scrollbar.updateDocScrollbar(_viewport);
       updateTextSelectionPopover();
       updateLassoSelectionPopover();
+      forms.positionFormOverlays();
     });
     setViewport(_viewport);
     _viewport.attachListeners($('stage'));
@@ -188,6 +190,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!evt) return;
     const type = evt.type;
     const data = evt.payload || {};
+
+    if (type === 'undo_form_value' || type === 'redo_form_value') {
+      forms.applyValue(data.name, data.value, 'form_value_sync');
+    }
 
     if (type && type.endsWith('restyle_shapes')) {
       // Plan 095: journal each restyled shape (commitStroke routes shapes).
@@ -410,6 +416,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Global compatibility bridges
   window.state = state;
+  window.__inkwellForms = forms;
+  forms.initForms();
   // Plan 094: synthetic stylus replay and latency numbers, for test_latency.py
   // and for measuring by hand from the devtools console.
   window.__bezierReplay = async (capture, opts) => (await import('./dev/replay.js')).replay(capture, opts);

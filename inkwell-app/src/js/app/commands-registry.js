@@ -3,7 +3,7 @@
  * (Split out of main.js by Plan 093; behaviour unchanged.)
  */
 
-import { state, $, on } from '../core/state.js';
+import { state, $, on, emit } from '../core/state.js';
 import * as history from '../core/history.js';
 import * as commandsModule from '../core/commands.js';
 import * as documentOps from '../core/document.js';
@@ -84,6 +84,7 @@ export function registerCoreCommands() {
           state.lastSavedAt = Date.now();
           state.lastSaveReason = reason;
           noteFlushed(reason);
+          emit('documentSaved', { path: savedPath, reason });
           toolbar.updateSaveStatusUI(state.isDirty ? 'dirty' : 'saved');
           if (!silent) toast.showToast('Document saved successfully', 'success');
           return true;

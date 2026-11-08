@@ -32,17 +32,17 @@ pub const DEFAULT_GROUP: usize = 64;
 pub struct PdfFile {
     /// The input file, followed by objects materialised from object streams
     /// (see `xref`). Only `view[..base_len]` is ever written back out.
-    view: Vec<u8>,
+    pub(crate) view: Vec<u8>,
     base_len: usize,
-    index: ObjIndex,
+    pub(crate) index: ObjIndex,
     next_id: u32,
-    root_num: u32,
+    pub(crate) root_num: u32,
     trailer_id: Option<Vec<u8>>,
     trailer_info: Option<Vec<u8>>,
     prev_xref: usize,
     /// The newest input section is an xref stream, so ours must be one too.
     xref_stream: bool,
-    pages: Vec<u32>,
+    pub(crate) pages: Vec<u32>,
     new_objs: BTreeMap<u32, Vec<u8>>,
 }
 
@@ -83,7 +83,7 @@ impl PdfFile {
 
     // -- structure walk ----------------------------------------------------
 
-    fn obj_dict(&self, num: u32) -> Result<(usize, usize)> {
+    pub(crate) fn obj_dict(&self, num: u32) -> Result<(usize, usize)> {
         let (bs, _) = self.index.find(&self.view, num).ok_or(Error::MissingObject(num))?;
         po::dict_inner(&self.view, bs)
     }
@@ -120,18 +120,18 @@ impl PdfFile {
 
     // -- object emission ---------------------------------------------------
 
-    fn add(&mut self, body: Vec<u8>) -> u32 {
+    pub(crate) fn add(&mut self, body: Vec<u8>) -> u32 {
         let n = self.next_id;
         self.next_id += 1;
         self.new_objs.insert(n, body);
         n
     }
 
-    fn replace(&mut self, num: u32, body: Vec<u8>) {
+    pub(crate) fn replace(&mut self, num: u32, body: Vec<u8>) {
         self.new_objs.insert(num, body);
     }
 
-    fn add_stream(&mut self, dict_extra: &str, data: &[u8], compress: bool) -> u32 {
+    pub(crate) fn add_stream(&mut self, dict_extra: &str, data: &[u8], compress: bool) -> u32 {
         let (payload, filter) = if compress {
             let mut e = ZlibEncoder::new(Vec::new(), Compression::best());
             e.write_all(data).expect("in-memory write");
@@ -146,7 +146,7 @@ impl PdfFile {
         self.add(body)
     }
 
-    fn resolve_rectangle(&self, r: (usize, usize)) -> Option<[f64; 4]> {
+    pub(crate) fn resolve_rectangle(&self, r: (usize, usize)) -> Option<[f64; 4]> {
         let raw = if let Some(ref_num) = po::as_ref_num(&self.view, r) {
             let (obj_start, _) = self.index.find(&self.view, ref_num)?;
             let end = po::skip_value(&self.view, obj_start);
@@ -314,6 +314,9 @@ impl PdfFile {
             }
             self.rewrite_page(page_num, &annots)?;
         }
+
+        // Form field values the user set (Plan 096), with fresh appearances.
+        self.write_form_values(&document.form_values);
 
         if flatten {
             // Read-only export: no embedded sidecar, no editable markers.
@@ -1225,7 +1228,7 @@ pub fn recover_truncated(data: &[u8]) -> Option<&[u8]> {
 // helpers
 // ---------------------------------------------------------------------------
 
-fn fmt_coord(v: f64) -> String {
+pub(crate) fn fmt_coord(v: f64) -> String {
     let rounded = (v * 100.0).round() / 100.0;
     if (rounded - rounded.round()).abs() < 1e-4 {
         format!("{}", rounded.round() as i64)
@@ -1244,7 +1247,7 @@ fn hex(b: &[u8]) -> String {
 }
 
 /// Collect `N 0 R` object numbers appearing in an array value range.
-fn refs_in_array(d: &[u8], range: (usize, usize)) -> Vec<u32> {
+pub(crate) fn refs_in_array(d: &[u8], range: (usize, usize)) -> Vec<u32> {
     let s = String::from_utf8_lossy(&d[range.0..range.1]);
     let toks: Vec<&str> = s
         .trim_matches(|c| c == '[' || c == ']')
@@ -1346,7 +1349,7 @@ fn parse_hex_color_rgb(hex: &str) -> (f64, f64, f64) {
 
 /// A PDF text string (§7.9.2.2) that keeps every character, newlines
 /// included: a literal for ASCII, UTF-16BE with BOM otherwise.
-fn pdf_text_string(s: &str) -> String {
+pub(crate) fn pdf_text_string(s: &str) -> String {
     if s.is_ascii() {
         let mut out = String::from("(");
         for c in s.chars() {

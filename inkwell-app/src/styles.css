@@ -6070,3 +6070,134 @@ body.presentation-mode .stage {
   background: rgba(56, 189, 248, 0.18);
   color: #7dd3fc;
 }
+
+/* ---- PDF form filling (Plan 096) ---- */
+.form-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.form-layer.hidden {
+  display: none;
+}
+
+.form-field {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  margin: 0;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  border-radius: 2px;
+  background: rgba(56, 189, 248, 0.08);
+  font-family: Inter, "Noto Sans Bengali", system-ui, sans-serif;
+  line-height: 1.2;
+  /* the saved value is already on the page underneath */
+  color: transparent;
+  caret-color: #0f172a;
+}
+
+.form-text {
+  padding: 0 2px;
+  resize: none;
+  outline: none;
+}
+
+textarea.form-text {
+  padding-top: 1px;
+}
+
+/* edited but not yet saved, or being edited: cover the stale rendering */
+.form-field.pending,
+.form-text:focus {
+  background: #fff;
+  color: inherit;
+}
+
+.form-text:focus,
+.form-choice:focus-visible,
+.form-toggle:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+.form-choice {
+  color: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+
+.form-choice.pending,
+.form-choice:focus {
+  color: #0f172a;
+  background: #fff;
+}
+
+/* checkboxes and radios: a 44 px hit area around the widget's own box */
+.form-toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.form-toggle::after {
+  content: "";
+  width: var(--box, 12px);
+  height: var(--box, 12px);
+  box-sizing: border-box;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.form-radio::after {
+  border-radius: 50%;
+}
+
+.form-toggle.pending::after {
+  background: #fff;
+}
+
+.form-toggle.pending[aria-checked="true"]::after {
+  background: radial-gradient(circle, #0f172a 0 32%, #fff 36%);
+}
+
+.form-checkbox.pending[aria-checked="true"]::after {
+  background: #fff linear-gradient(135deg, transparent 42%, #0f172a 42% 58%, transparent 58%);
+}
+
+.form-chip {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 45;
+}
+
+.form-chip.hidden {
+  display: none;
+}
+
+.form-chip-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(15, 23, 42, 0.85);
+  color: #e0f2fe;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+
+.form-chip-btn[aria-pressed="false"] {
+  color: #94a3b8;
+}
+
+.form-chip-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}

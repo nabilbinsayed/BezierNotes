@@ -194,6 +194,9 @@ fn replay_wal_journal(
                     WalEntry::ShapeRemoved { id } => {
                         doc.remove_shape(&id);
                     }
+                    WalEntry::FieldValue { name, value } => {
+                        doc.form_values.insert(name, value);
+                    }
                 }
             }
         }

@@ -20,6 +20,7 @@ pub mod text;
 pub mod session;
 pub mod window;
 pub mod merge;
+pub mod forms;
 
 // Helpers shared between sibling modules.
 use ink::apply_frontend_payload;

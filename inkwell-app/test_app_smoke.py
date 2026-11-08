@@ -3413,6 +3413,98 @@ with sync_playwright() as pw:
           and s["reopened"] == ["arrow", "ellipse", "line", "rect"] and s["reopenedStyle"], f"res={s}")
 
     # -------------------------------------------------------------
+    # T34: PDF form filling (Plan 096)
+    # -------------------------------------------------------------
+    print("\n=== T34 Form Filling ===", flush=True)
+    form_res = pg.evaluate("""(async () => {
+      const forms = await import('./js/workspace/forms.js');
+      const { getViewport } = await import('./js/app/viewport-ref.js');
+      const stub = window.__inkwell_stub;
+      const sets = [];
+      const W = (page, order, x, y, w, h, on_state = null) => ({ page, order, x, y, w, h, on_state });
+      const F = (name, kind, value, widgets, extra = {}) => Object.assign({ name, kind, value, rendered_value: value, options: [],
+        read_only: false, multiline: false, comb: false, max_len: null, quadding: 0, font_size: 10, color: [0, 0, 0], widgets }, extra);
+      stub.get_form_fields = async () => ({ has_scripts: true, xfa: false, fields: [
+        F('city', 'text', '', [W(0, 3, 300, 60, 150, 20)], { quadding: 1 }),
+        F('name', 'text', 'Ada', [W(0, 1, 60, 60, 200, 20)]),
+        F('agree', 'checkbox', 'Off', [W(0, 2, 60, 100, 12, 12, 'Yes')]),
+        F('size', 'radio', 'Off', [W(0, 4, 60, 140, 12, 12, 'Small'), W(0, 5, 90, 140, 12, 12, 'Large')]),
+        F('country', 'combo', 'de', [W(0, 6, 60, 180, 120, 18)], { options: [['bd', 'Bangladesh'], ['de', 'Germany']] }),
+        F('id', 'text', 'fixed', [W(0, 7, 60, 220, 100, 18)], { read_only: true }),
+      ] });
+      stub.set_form_value = async (a) => { sets.push(a); return true; };
+      const out = {};
+      // T33 ended with a document load, whose deferred form load must not
+      // land in the middle of this test
+      await new Promise(r => setTimeout(r, 500));
+      await forms.loadForm();
+      const els = Array.from(document.querySelectorAll('#formLayer .form-field'));
+      out.count = els.length;
+      out.tabOrder = els.map(e => e.dataset.field);
+      out.chip = !document.getElementById('formChip').classList.contains('hidden');
+      out.scriptNotice = Array.from(document.querySelectorAll('.toast')).some(t => /uses scripts/.test(t.textContent));
+
+      // text: type (incl. Bangla), commit on change; pending until saved
+      const name = els.find(e => e.dataset.field === 'name');
+      name.focus(); name.value = 'নমস্কার Ada'; name.dispatchEvent(new Event('input')); name.dispatchEvent(new Event('change')); name.blur();
+      out.textSet = sets.at(-1) && sets.at(-1).name === 'name' && sets.at(-1).value === 'নমস্কার Ada' && typeof sets.at(-1).seq === 'number';
+      out.pending = name.classList.contains('pending');
+      out.centred = els.find(e => e.dataset.field === 'city').style.textAlign === 'center';
+
+      // checkbox and radio
+      const agree = els.find(e => e.dataset.field === 'agree');
+      agree.click();
+      out.checked = agree.getAttribute('aria-checked') === 'true' && sets.at(-1).value === 'Yes';
+      const radios = els.filter(e => e.dataset.field === 'size');
+      radios[1].click();
+      out.radio = radios[1].getAttribute('aria-checked') === 'true' && radios[0].getAttribute('aria-checked') === 'false' && sets.at(-1).value === 'Large';
+      out.toggleTarget = agree.getBoundingClientRect().width >= 44 && agree.getBoundingClientRect().height >= 44;
+
+      // choice and read-only
+      const country = els.find(e => e.dataset.field === 'country');
+      country.value = 'bd'; country.dispatchEvent(new Event('change'));
+      out.choice = sets.at(-1).name === 'country' && sets.at(-1).value === 'bd';
+      out.readOnly = els.find(e => e.dataset.field === 'id').readOnly === true;
+
+      // undo / redo (each journalled)
+      window.documentOps.performUndo();
+      await new Promise(r => setTimeout(r, 10));
+      out.undo = country.value === 'de' && sets.at(-1).value === 'de';
+      window.documentOps.performRedo();
+      await new Promise(r => setTimeout(r, 10));
+      out.redo = country.value === 'bd' && sets.at(-1).value === 'bd';
+
+      // a save makes the rendering current: no more pending covers
+      forms.noteSaved();
+      // covers stay ~400 ms while the new tiles arrive
+      for (let i = 0; i < 30 && name.classList.contains('pending'); i++) await new Promise(r => setTimeout(r, 100));
+      out.clearedAfterSave = !name.classList.contains('pending');
+
+      // controls follow zoom
+      const vp = getViewport();
+      const w0 = name.getBoundingClientRect().width;
+      vp.setZoom ? vp.setZoom(vp.zoom * 1.5) : (vp.zoom *= 1.5);
+      forms.positionFormOverlays();
+      out.followsZoom = Math.abs(name.getBoundingClientRect().width - w0 * 1.5) < 2;
+
+      forms.clearForm();
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    f = form_res
+    check("form fields get controls in the form's tab order, with a fill chip and a script notice",
+          f["count"] == 7 and f["tabOrder"] == ["name", "agree", "city", "size", "size", "country", "id"]
+          and f["chip"] and f["scriptNotice"], f"res={f}")
+    check("typing (Bangla too) sets and journals a text field, shown as pending until saved",
+          f["textSet"] and f["pending"] and f["centred"], f"res={f}")
+    check("checkbox toggles; radios are exclusive; 44 px hit area", f["checked"] and f["radio"] and f["toggleTarget"], f"res={f}")
+    check("choice fields set their export value; read-only fields can't be edited", f["choice"] and f["readOnly"], f"res={f}")
+    check("form edits undo and redo, journalled each way", f["undo"] and f["redo"], f"res={f}")
+    check("after a save the page rendering shows values (no covers); controls follow zoom",
+          f["clearedAfterSave"] and f["followsZoom"], f"res={f}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)
