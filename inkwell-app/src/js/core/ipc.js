@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 import { state, warnDurability } from './state.js';
+import { isShape, toBackendShape } from './shapes-model.js';
 
 export function getInvoke() {
   if (typeof window === 'undefined') return null;
@@ -65,8 +66,11 @@ export async function openPdfBytes(name, bytes) {
 }
 
 function buildSavePayload(strokes, images, texts) {
+  const all = strokes || [];
   const payload = {
-    strokes: (strokes || []).map(s => ({
+    // Plan 095: shapes travel separately, as the backend's ShapeObjects
+    shapes: all.filter(s => isShape(s) && !s.deleted).map(toBackendShape),
+    strokes: all.filter(s => !isShape(s)).map(s => ({
       id: String(s.id),
       kind: s.kind || 'pen',
       rgb: s.rgb || [0.08, 0.09, 0.14],
@@ -148,6 +152,13 @@ export async function trashConflictCopy(path) {
   return await invokeTauri('trash_conflict_copy', { path });
 }
 
+/** Journal a shape created/edited ('upsert', with its ShapeObject) or deleted ('remove'). */
+export async function journalShapeMutation(op, shape, shapeId = null) {
+  return await invokeTauri('journal_shape_mutation', {
+    op, shape: shape || null, shapeId: shapeId || (shape ? shape.id : null), seq: nextJournalSeq(),
+  });
+}
+
 /** Ask the backend's FlushPolicy whether to autosave now; returns a reason or null. */
 export async function autosaveTick(dirty, sinceInputS, sinceFlushS, focusLost) {
   return await invokeTauri('autosave_tick', { dirty, sinceInputS, sinceFlushS, focusLost });
@@ -216,6 +227,17 @@ export async function prefetchPage(pageIndex, px) {
 // ---- Vector Stroke Persistence ----
 
 export async function commitStroke(sheet, tool, rgb, baseWidth, points, clientId = null) {
+  // Shapes ride in the stroke list (Plan 095). Every path that commits a
+  // stroke (create, transform, erase, undo, paste) commits a shape through
+  // here too; journal it as the shape it is.
+  if (clientId !== null) {
+    const live = (state.strokes || []).find(s => String(s.id) === String(clientId));
+    if (isShape(live)) {
+      const shape = toBackendShape({ ...live, sheet: sheet || 0, rgb: rgb || live.rgb, base_width: baseWidth || live.base_width, points: points || live.points });
+      await journalShapeMutation('upsert', shape);
+      return String(clientId);
+    }
+  }
   const samplesPayload = (points || []).map(pt => ({
     x: pt.x !== undefined ? pt.x : pt[0],
     y: pt.y !== undefined ? pt.y : pt[1],

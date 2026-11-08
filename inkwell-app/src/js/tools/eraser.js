@@ -131,8 +131,8 @@ export function eraseStrokesAt(ptWorld, pane, viewport) {
       }
     }
 
-    // Precise segment proximity test
-    const pts = s.points || [];
+    // Precise segment proximity test (a shape is tested along its outline)
+    const pts = window.Ink && window.Ink.hitPoints ? window.Ink.hitPoints(s) : (s.points || []);
     let hit = false;
     for (let i = 0; i < pts.length; i++) {
       const pt = pts[i];
@@ -158,7 +158,9 @@ export function eraseStrokesAt(ptWorld, pane, viewport) {
 
     if (!hit) continue;
 
-    if (partial) {
+    // A shape is erased whole: splitting its control points would not split
+    // the shape (Plan 095).
+    if (partial && !s.shape) {
       // The eraser works in page-local coordinates.
       const fragments = splitStrokeByCircle(s, wx - pl.x, wy - pl.y, discRadius);
       if (fragments && fragments.length) {

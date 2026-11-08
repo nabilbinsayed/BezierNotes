@@ -3,6 +3,7 @@
 use crate::clock::{self, Clock, DeviceId, DeviceIdentity, Fnv, ObjClock, ObjectId, Peer, Tombstone};
 use crate::codec;
 use crate::ink::{Stroke, NOMINAL_HZ};
+pub use crate::shape::ShapeObject;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -74,6 +75,11 @@ pub struct Sheet {
     pub text_objects: Vec<TextObject>,
     #[serde(default)]
     pub template: Option<String>,
+    /// Parametric shapes (Plan 095), drawn above strokes, below text notes.
+    /// Not written when empty, so documents without shapes encode exactly as
+    /// before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<ShapeObject>,
     /// Stable identity across devices (Plan 091). `0` = not assigned yet: base
     /// PDF pages get one derived from the base file at open
     /// (`Document::assign_base_page_ids`), new pages one at the next save.
@@ -93,6 +99,7 @@ impl Sheet {
             images: Vec::new(),
             text_objects: Vec::new(),
             template: None,
+            shapes: Vec::new(),
             page_id: 0,
             order_key: String::new(),
         }
@@ -104,6 +111,7 @@ impl Sheet {
             images: Vec::new(),
             text_objects: Vec::new(),
             template: None,
+            shapes: Vec::new(),
             page_id: 0,
             order_key: String::new(),
         }
@@ -139,6 +147,14 @@ impl Sheet {
     pub fn remove_text(&mut self, id: &str) -> bool {
         if let Some(pos) = self.text_objects.iter().position(|t| t.id == id) {
             self.text_objects.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn remove_shape(&mut self, id: &str) -> bool {
+        if let Some(pos) = self.shapes.iter().position(|s| s.id == id) {
+            self.shapes.remove(pos);
             true
         } else {
             false
@@ -261,6 +277,10 @@ impl Document {
             txt.sheet = target_idx;
             txt.id = format!("{}_dup_{}_{}", txt.id, target_idx, i);
         }
+        for (i, sh) in cloned.shapes.iter_mut().enumerate() {
+            sh.sheet = target_idx;
+            sh.id = format!("{}_dup_{}_{}", sh.id, target_idx, i);
+        }
         // A copy is a new page, not a second instance of this one.
         cloned.page_id = 0;
         cloned.order_key.clear();
@@ -371,6 +391,20 @@ impl Document {
         false
     }
 
+    /// Insert or replace a shape (by id), moving it to `sheet`.
+    pub fn upsert_shape(&mut self, sheet: usize, mut shape: ShapeObject) {
+        self.remove_shape(&shape.id);
+        while self.sheets.len() <= sheet {
+            self.sheets.push(Sheet::bounded(self.sheets.len()));
+        }
+        shape.sheet = sheet;
+        self.sheets[sheet].shapes.push(shape);
+    }
+
+    pub fn remove_shape(&mut self, id: &str) -> bool {
+        self.sheets.iter_mut().any(|sh| sh.remove_shape(id))
+    }
+
     /// Erase all strokes on a given sheet whose centreline passes within
     /// `radius` (in PDF user-units) of point `(px, py)`.
     /// Returns the IDs of removed strokes.
@@ -478,6 +512,35 @@ fn text_hash(page: u128, t: &TextObject) -> u64 {
     h.finish()
 }
 
+fn shape_hash(page: u128, s: &ShapeObject) -> u64 {
+    let mut h = Fnv::new();
+    h.word(page as u64).word((page >> 64) as u64);
+    h.bytes(serde_json::to_string(&s.kind).unwrap_or_default().as_bytes());
+    for p in &s.points {
+        h.q(p[0], POS_Q).q(p[1], POS_Q);
+    }
+    for c in s.stroke_rgb {
+        h.q(c, 255.0);
+    }
+    h.q(s.stroke_width, POS_Q).q(s.opacity, 1000.0).q(s.corner_radius, POS_Q);
+    match s.fill_rgb {
+        Some(f) => {
+            h.word(1);
+            for c in f {
+                h.q(c, 255.0);
+            }
+        }
+        None => {
+            h.word(0);
+        }
+    }
+    for d in s.dash.iter().flatten() {
+        h.q(*d, POS_Q);
+    }
+    h.word(s.arrow_start as u64).word(s.arrow_end as u64);
+    h.finish()
+}
+
 fn bookmark_hash(page: u128, b: &Bookmark) -> u64 {
     // By page identity, like every other object: a bookmark whose page index
     // shifts because an earlier page was deleted now points at another page.
@@ -506,6 +569,9 @@ impl Document {
             }
             for t in &sh.text_objects {
                 out.insert(ObjectId::Text(t.id.clone()), text_hash(p, t));
+            }
+            for s in &sh.shapes {
+                out.insert(ObjectId::Shape(s.id.clone()), shape_hash(p, s));
             }
         }
         for b in &self.bookmarks {

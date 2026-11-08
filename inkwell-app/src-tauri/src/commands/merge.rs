@@ -158,6 +158,7 @@ pub struct MergeApplied {
     pub images: Vec<FrontendImage>,
     pub texts: Vec<FrontendText>,
     pub bookmarks: Vec<inkwell_core::doc::Bookmark>,
+    pub shapes: Vec<inkwell_core::shape::ShapeObject>,
     /// Hex ids of strokes that came from the other copy (tinted briefly).
     pub incoming_stroke_ids: Vec<String>,
 }
@@ -169,13 +170,14 @@ fn kind_of(id: &ObjectId) -> &'static str {
         ObjectId::Text(_) => "note",
         ObjectId::Bookmark(_) => "bookmark",
         ObjectId::Page(_) => "page",
+        ObjectId::Shape(_) => "shape",
     }
 }
 
 fn plain_id(id: &ObjectId) -> String {
     match id {
         ObjectId::Stroke(s) | ObjectId::Page(s) => format!("{s:032x}"),
-        ObjectId::Image(s) | ObjectId::Text(s) | ObjectId::Bookmark(s) => s.clone(),
+        ObjectId::Image(s) | ObjectId::Text(s) | ObjectId::Bookmark(s) | ObjectId::Shape(s) => s.clone(),
     }
 }
 
@@ -185,6 +187,7 @@ fn page_of(doc: &Document, id: &ObjectId) -> Option<usize> {
         ObjectId::Image(i) => sh.images.iter().any(|x| &x.id == i),
         ObjectId::Text(t) => sh.text_objects.iter().any(|x| &x.id == t),
         ObjectId::Page(p) => sh.page_id == *p,
+        ObjectId::Shape(s) => sh.shapes.iter().any(|x| &x.id == s),
         ObjectId::Bookmark(_) => false,
     })
 }
@@ -247,14 +250,15 @@ type Payload = (
     Option<Vec<FrontendStroke>>,
     Option<Vec<FrontendText>>,
     Option<Vec<inkwell_core::doc::Bookmark>>,
+    Option<Vec<inkwell_core::shape::ShapeObject>>,
 );
 
 /// Bring the session up to date with the frontend (as a save does), stamp
 /// it, and merge `other` into a copy of it.
 fn merged_with(state: &AppState, other: &Path, payload: Payload) -> Result<(merge::MergeResult, Document), String> {
     let theirs = read_other(state, other)?;
-    let (images, strokes, texts, bookmarks) = payload;
-    apply_frontend_payload(state, images, strokes, texts, bookmarks)?;
+    let (images, strokes, texts, bookmarks, shapes) = payload;
+    apply_frontend_payload(state, images, strokes, texts, bookmarks, shapes)?;
     let me = state.device.lock().unwrap().clone();
     let ours = {
         let mut g = state.doc.lock().unwrap();
@@ -296,11 +300,12 @@ pub async fn preview_merge(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     state: State<'_, AppState>,
 ) -> Result<MergePreview, String> {
     let other = resolve_other(&state, other_path)?;
     let _guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
-    let (result, _) = merged_with(&state, &other, (images, strokes, texts, bookmarks))?;
+    let (result, _) = merged_with(&state, &other, (images, strokes, texts, bookmarks, shapes))?;
     Ok(preview_of(display_name(&other), &result.report, &result.doc))
 }
 
@@ -314,11 +319,12 @@ pub async fn apply_merge(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     state: State<'_, AppState>,
 ) -> Result<MergeApplied, String> {
     let other = resolve_other(&state, other_path.clone())?;
     let _guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
-    let applied = apply_merge_locked(&state, &other, (images, strokes, texts, bookmarks), take_ours, take_theirs)?;
+    let applied = apply_merge_locked(&state, &other, (images, strokes, texts, bookmarks, shapes), take_ours, take_theirs)?;
     if other_path.is_none() {
         // The merge now includes what changed on disk: the next save may
         // replace it without raising the change banner again.
@@ -362,6 +368,7 @@ pub(crate) fn apply_merge_locked(
         images: extract_frontend_images(&doc),
         texts: extract_frontend_texts(&doc),
         bookmarks: doc.bookmarks.clone(),
+        shapes: doc.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect(),
         incoming_stroke_ids,
     };
     *state.doc.lock().unwrap() = Some(doc);
@@ -467,7 +474,7 @@ mod tests {
 
         assert_eq!(siblings_of(&target, &fp).len(), 1);
         let other = resolve_other(&state, Some(copy.to_string_lossy().into_owned())).unwrap();
-        let applied = apply_merge_locked(&state, &other, (None, None, None, None), None, None).unwrap();
+        let applied = apply_merge_locked(&state, &other, (None, None, None, None, None), None, None).unwrap();
         let ids: Vec<u128> = state.doc.lock().unwrap().as_ref().unwrap().sheets[0].strokes().map(|s| s.id).collect();
         assert!(!ids.contains(&ink(1).id), "the tablet's delete holds");
         for keep in [2, 3, 4] {

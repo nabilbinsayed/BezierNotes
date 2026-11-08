@@ -1,0 +1,195 @@
+5 0 obj
+<< /Contents 9 0 R
+/MediaBox [ 0 0 595.2756 841.8898 ]
+/Parent 8 0 R
+/Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>>
+/Rotate 0
+/Trans <<
+
+>>
+/Type /Page
+/Annots [11 0 R 13 0 R 15 0 R 17 0 R 19 0 R 21 0 R 23 0 R 25 0 R ] >>
+endobj
+
+6 0 obj
+<< /PageMode /UseNone
+/Pages 8 0 R
+/Type /Catalog
+/Names << /EmbeddedFiles << /Names [(inkwell.doc) 27 0 R] >> >>
+/AF [27 0 R]
+/Inkw_Doc 26 0 R
+/Inkw_Ver 1
+/Inkw_Hash <769f7e0e44a3ecaacedab409d329ebba8c39fd773300bffd7ad50d9b8ae6767f>
+/Inkw_Base 2458
+/Inkw_BaseHash <837aaa227f08b8b5b6706a9b0e8425e3bae9ad0d5e488d3c1c42432c9bfecc7d>
+>>
+endobj
+
+10 0 obj
+<< /Type /XObject /Subtype /Form /BBox [66.5 668.39 233.5 775.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+0.950 0.850 0.200 rg
+70 771.89 m
+230 771.89 l
+230 671.89 l
+70 671.89 l
+h
+B
+Q
+endstream
+endobj
+
+11 0 obj
+<< /Type /Annot /Subtype /Square /F 4 /Rect [66.5 668.39 233.5 775.39] /RD [3.5 3.5 3.5 3.5] /IC [0.950 0.850 0.200] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (rect) /AP << /N 10 0 R >> /Inkw_Sid (shp_rect) >>
+endobj
+
+12 0 obj
+<< /Type /XObject /Subtype /Form /BBox [316.5 678.39 443.5 765.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+320 749.89 m
+320 756.52 325.37 761.89 332 761.89 c
+428 761.89 l
+434.63 761.89 440 756.52 440 749.89 c
+440 693.89 l
+440 687.26 434.63 681.89 428 681.89 c
+332 681.89 l
+325.37 681.89 320 687.26 320 693.89 c
+h
+S
+Q
+endstream
+endobj
+
+13 0 obj
+<< /Type /Annot /Subtype /Square /F 4 /Rect [316.5 678.39 443.5 765.39] /RD [3.5 3.5 3.5 3.5] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (rounded) /AP << /N 12 0 R >> /Inkw_Sid (shp_rounded) >>
+endobj
+
+14 0 obj
+<< /Type /XObject /Subtype /Form /BBox [76.5 538.39 223.5 625.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+220 581.89 m
+220 559.8 188.66 541.89 150 541.89 c
+111.34 541.89 80 559.8 80 581.89 c
+80 603.98 111.34 621.89 150 621.89 c
+188.66 621.89 220 603.98 220 581.89 c
+h
+S
+Q
+endstream
+endobj
+
+15 0 obj
+<< /Type /Annot /Subtype /Circle /F 4 /Rect [76.5 538.39 223.5 625.39] /RD [3.5 3.5 3.5 3.5] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (ellipse) /AP << /N 14 0 R >> /Inkw_Sid (shp_ellipse) >>
+endobj
+
+16 0 obj
+<< /Type /XObject /Subtype /Form /BBox [342.42 518.7 457.58 605.08] /Resources << /ExtGState << /GS0 << /Type /ExtGState /CA 0.500 /ca 0.500 >> >> >> /Filter /FlateDecode /Length <n> >>
+q
+/GS0 gs
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+0.200 0.700 0.400 rg
+451.96 531.89 m
+443.68 517.54 413.7 519.34 385 535.91 c
+356.3 552.48 339.75 577.54 348.04 591.89 c
+356.32 606.24 386.3 604.44 415 587.87 c
+443.7 571.3 460.25 546.24 451.96 531.89 c
+h
+B
+Q
+endstream
+endobj
+
+17 0 obj
+<< /Type /Annot /Subtype /Polygon /F 4 /Rect [342.42 518.7 457.58 605.08] /Vertices [451.96 531.89 450.24 529.49 448.04 527.4 445.37 525.64 442.27 524.23 438.76 523.18 434.87 522.51 430.65 522.22 426.14 522.31 421.37 522.77 416.4 523.62 411.27 524.83 406.03 526.41 400.73 528.32 395.43 530.56 390.17 533.09 385 535.91 379.98 538.97 375.15 542.26 370.56 545.74 366.26 549.37 362.28 553.12 358.66 556.95 355.44 560.84 352.65 564.73 350.32 568.6 348.46 572.4 347.1 576.1 346.25 579.66 345.92 583.06 346.11 586.24 346.82 589.2 348.04 591.89 349.76 594.29 351.96 596.38 354.63 598.14 357.73 599.55 361.24 600.59 365.13 601.27 369.35 601.56 373.86 601.47 378.63 601 383.6 600.16 388.73 598.94 393.97 597.37 399.27 595.46 404.57 593.22 409.83 590.69 415 587.87 420.02 584.8 424.85 581.52 429.44 578.04 433.74 574.41 437.72 570.66 441.34 566.82 444.56 562.94 447.35 559.05 449.68 555.18 451.54 551.38 452.9 547.68 453.75 544.12 454.08 540.72 453.89 537.53 453.18 534.58] /IC [0.200 0.700 0.400] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (tilted) /AP << /N 16 0 R >> /Inkw_Sid (shp_tilted) >>
+endobj
+
+18 0 obj
+<< /Type /XObject /Subtype /Form /BBox [86.5 366.15 303.5 445.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+90 441.89 m
+288.69 375.66 l
+S
+[] 0 d 0.100 0.200 0.600 rg
+300 371.89 m 286.69 369.65 l 290.7 381.67 l h
+f
+Q
+endstream
+endobj
+
+19 0 obj
+<< /Type /Annot /Subtype /Line /F 4 /Rect [86.5 366.15 303.5 445.39] /L [90 441.89 300 371.89] /LE [/None /ClosedArrow] /IC [0.100 0.200 0.600] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (arrow) /AP << /N 18 0 R >> /Inkw_Sid (shp_arrow) >>
+endobj
+
+20 0 obj
+<< /Type /XObject /Subtype /Form /BBox [326.5 432.05 503.5 451.73] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 0 J 1 j
+[6 4] 0 d
+341.92 441.89 m
+488.08 441.89 l
+S
+[] 0 d 0.100 0.200 0.600 rg
+330 441.89 m 341.92 448.23 l 341.92 435.55 l h
+500 441.89 m 488.08 435.55 l 488.08 448.23 l h
+f
+Q
+endstream
+endobj
+
+21 0 obj
+<< /Type /Annot /Subtype /Line /F 4 /Rect [326.5 432.05 503.5 451.73] /L [330 441.89 500 441.89] /LE [/ClosedArrow /ClosedArrow] /IC [0.100 0.200 0.600] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /D /D [6 4] >> /T (BezierNotes) /NM (line) /AP << /N 20 0 R >> /Inkw_Sid (shp_line) >>
+endobj
+
+22 0 obj
+<< /Type /XObject /Subtype /Form /BBox [77.5 199.39 222.5 324.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 2 w 1 J 1 j
+0.900 0.300 0.300 rg
+150 321.89 m
+220 201.89 l
+80 201.89 l
+h
+B
+Q
+endstream
+endobj
+
+23 0 obj
+<< /Type /Annot /Subtype /Polygon /F 4 /Rect [77.5 199.39 222.5 324.39] /Vertices [150 321.89 220 201.89 80 201.89] /IC [0.900 0.300 0.300] /C [0.100 0.200 0.600] /BS << /Type /Border /W 2 /S /S >> /T (BezierNotes) /NM (triangle) /AP << /N 22 0 R >> /Inkw_Sid (shp_triangle) >>
+endobj
+
+24 0 obj
+<< /Type /XObject /Subtype /Form /BBox [296.5 218.39 423.5 305.39] /Resources << >> /Filter /FlateDecode /Length <n> >>
+q
+0.100 0.200 0.600 RG 3 w 1 J 1 j
+300 301.89 m
+340 221.89 l
+380 301.89 l
+420 221.89 l
+S
+Q
+endstream
+endobj
+
+25 0 obj
+<< /Type /Annot /Subtype /PolyLine /F 4 /Rect [296.5 218.39 423.5 305.39] /Vertices [300 301.89 340 221.89 380 301.89 420 221.89] /C [0.100 0.200 0.600] /BS << /Type /Border /W 3 /S /S >> /T (BezierNotes) /NM (zigzag) /AP << /N 24 0 R >> /Inkw_Sid (shp_zigzag) >>
+endobj
+
+26 0 obj
+<< /Type /EmbeddedFile /Subtype /application#2Fx-inkwell /Params << /Size 2459 >> /Filter /FlateDecode /Length <n> >>
+<sidecar 2459 bytes sha256=769f7e0e44a3ecaacedab409d329ebba8c39fd773300bffd7ad50d9b8ae6767f>
+endstream
+endobj
+
+27 0 obj
+<< /Type /Filespec /F (inkwell.doc) /UF (inkwell.doc) /Desc (Inkwell editable ink data \(pressure, layers, samples\)) /AFRelationship /Supplement /EF << /F 26 0 R >> >>
+endobj
+
+trailer
+<< /Size 28 /Root 6 0 R /Prev 2045 /Info 7 0 R /ID <masked> >>

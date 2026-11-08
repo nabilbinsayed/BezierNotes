@@ -189,6 +189,16 @@ window.addEventListener('DOMContentLoaded', async () => {
     const type = evt.type;
     const data = evt.payload || {};
 
+    if (type && type.endsWith('restyle_shapes')) {
+      // Plan 095: journal each restyled shape (commitStroke routes shapes).
+      for (const s of (data.strokes || [])) {
+        ipc.commitStroke(s.sheet ?? 0, s.kind || 'pen', s.rgb, s.base_width, s.points, s.id).catch(err => {
+          console.warn('[inkwell/main] shape restyle journal error:', err);
+        });
+      }
+      compositor.scheduleRedrawAll();
+    }
+
     if (type && type.endsWith('replace_annotations')) {
       // A merge or its undo swapped every annotation (Plan 092).
       drawers.renderBookmarks();

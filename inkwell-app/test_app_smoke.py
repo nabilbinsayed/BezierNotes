@@ -3277,6 +3277,142 @@ with sync_playwright() as pw:
     pg.evaluate("window.documentOps.performUndo(); window.state.isDirty = false")
 
     # -------------------------------------------------------------
+    # T33: Parametric shapes (Plan 095)
+    # -------------------------------------------------------------
+    print("\n=== T33 Parametric Shapes ===", flush=True)
+    shape_res = pg.evaluate("""(async () => {
+      const out = {};
+      const shapesModel = await import('./js/core/shapes-model.js');
+      const shapesTool = await import('./js/tools/shapes.js');
+      const popovers = await import('./js/ui/popovers.js');
+      const lasso = await import('./js/tools/lasso.js');
+      const { getViewport } = await import('./js/app/viewport-ref.js');
+      const stub = window.__inkwell_stub;
+      const journal = [], saves = [];
+      stub.journal_shape_mutation = async (a) => { journal.push(a); return true; };
+      stub.save_pdf = async (a) => { saves.push(a); return a.outPathStr; };
+
+      // 1. The canvas port draws exactly what the Rust writer draws.
+      const fx = await (await fetch('../../inkwell/crates/inkwell-core/tests/golden/shape_paths.json')).json();
+      let worst = 0, mismatches = [];
+      const close = (a, b) => { const d = Math.abs(a - b); worst = Math.max(worst, d); return d < 1e-9; };
+      for (const c of fx) {
+        const sh = window.Ink.shapeOf(shapesModel.fromBackendShape(c.shape));
+        const got = window.Ink.shapeOutline(sh);
+        const ok = got.length === c.outline.length && got.every((cmd, i) => cmd[0] === c.outline[i][0]
+          && cmd.slice(1).every((v, k) => close(v, c.outline[i][k + 1])));
+        const heads = window.Ink.shapeArrowHeads(sh);
+        const hok = heads.length === c.heads.length && heads.every((h, i) => h.every((q, j) => close(q[0], c.heads[i][j][0]) && close(q[1], c.heads[i][j][1])));
+        const bb = window.Ink.shapeBbox(sh);
+        const bok = bb.every((v, i) => close(v, c.bbox[i]));
+        if (!ok || !hok || !bok) mismatches.push(c.shape.id);
+      }
+      out.crossCheck = { cases: fx.length, mismatches, worst };
+
+      // 2. Every shape tool kind creates a shape (not a sampled stroke) and journals it.
+      const vp = getViewport();
+      const pl = vp.getPageLayout(0);
+      window.documentOps.setDocument({ pageInfos: window.state.pageInfos, strokes: [], images: [], textObjects: [], bookmarks: [] });
+      const kinds = ['rect', 'ellipse', 'triangle', 'line', 'arrow'];
+      kinds.forEach((k, i) => {
+        window.state.shapeKind = k;
+        const x = pl.x + 60 + i * 90, y = pl.y + 80;
+        shapesTool.onShapeDown({}, [x, y], 'left', vp);
+        shapesTool.onShapeMove({}, [x + 70, y + 50], 'left', vp);
+        shapesTool.onShapeUp({}, vp);
+      });
+      await new Promise(r => setTimeout(r, 30));
+      const made = window.state.strokes.filter(s => s.shape);
+      out.created = made.map(s => s.shape.kind);
+      out.journalled = journal.filter(j => j.op === 'upsert').map(j => j.shape.kind);
+      out.controlPoints = made.map(s => s.points.length);
+
+      // 3. A click on a rect's outline selects it; restyle; undo; redo.
+      const rect = made.find(s => s.shape.kind === 'rect');
+      const [c, a] = rect.points;
+      const hit = lasso.findObjectAtWorld(pl.x + a.x, pl.y + c.y, vp);
+      out.hitOutline = !!hit && hit.item === rect;
+      out.missCentreUnfilled = (lasso.findObjectAtWorld(pl.x + c.x, pl.y + c.y, vp, 2) || {}).item !== rect;
+      window.toolManager.setTool('lasso');
+      window.state.selectedStrokes = [rect];
+      popovers.updateLassoSelectionPopover();
+      const group = document.getElementById('lassoShapeStyle');
+      out.styleShown = !group.classList.contains('hidden');
+      out.arrowHiddenForRect = document.getElementById('btnShapeArrow').classList.contains('hidden');
+      const before = journal.length;
+      document.getElementById('btnShapeFill').click();
+      document.getElementById('btnShapeDash').click();
+      document.getElementById('btnShapeRound').click();
+      await new Promise(r => setTimeout(r, 20));
+      out.styled = Array.isArray(rect.shape.fill) && Array.isArray(rect.shape.dash) && rect.shape.cornerRadius > 0;
+      out.styleJournalled = journal.length - before >= 3 && journal[journal.length - 1].shape.corner_radius > 0;
+      out.hitInsideFilled = (lasso.findObjectAtWorld(pl.x + c.x, pl.y + c.y, vp, 2) || {}).item === rect;
+      window.documentOps.performUndo();
+      out.undoOne = rect.shape.cornerRadius === 0 && Array.isArray(rect.shape.dash);
+      window.documentOps.performRedo();
+      out.redo = rect.shape.cornerRadius > 0;
+
+      // 4. A lasso move (drag inside the selection) maps the control points.
+      const cx0 = rect.points[0].x;
+      const journalBeforeMove = journal.length;
+      const at = (wx, wy) => ({ world: [wx, wy], screen: vp.worldToScreen(wx, wy, 'left') });
+      const p0 = at(pl.x + rect.points[0].x, pl.y + rect.points[0].y);
+      const p1 = at(p0.world[0] + 25, p0.world[1]);
+      const ev = (sx, sy, buttons) => ({ clientX: sx, clientY: sy, buttons, button: 0, pointerType: 'mouse', shiftKey: false });
+      lasso.onLassoDown(ev(p0.screen[0], p0.screen[1], 1), p0.world, p0.screen, 'left', vp);
+      lasso.onLassoMove(ev(p1.screen[0], p1.screen[1], 1), p1.world, p1.screen, 'left', vp);
+      lasso.onLassoUp(ev(p1.screen[0], p1.screen[1], 0), vp);
+      await new Promise(r => setTimeout(r, 30));
+      out.moved = Math.abs(rect.points[0].x - (cx0 + 25)) < 1e-6 && rect.points[0].sk === 'rect';
+      out.moveJournalled = journal.slice(journalBeforeMove).some(j => j.op === 'upsert' && j.shape.id === rect.id
+        && Math.abs(j.shape.points[0][0] - (cx0 + 25)) < 1e-6);
+
+      // 5. Partial erase removes a shape whole.
+      window.state.eraserMode = 'partial';
+      const tri = made.find(s => s.shape.kind === 'polygon');
+      const eraser = await import('./js/tools/eraser.js');
+      eraser.eraseStrokesAt([pl.x + tri.points[1].x, pl.y + tri.points[1].y], 'left', vp);
+      out.erasedWhole = tri.deleted === true && !window.state.strokes.some(s => !s.deleted && s !== tri && s.shape && s.shape.kind === 'polygon');
+      window.state.eraserMode = 'stroke';
+
+      // 6. Save sends shapes as ShapeObjects, not strokes; reopen restores them.
+      window.state.currentDocPath = '/tmp/shapes.pdf';
+      await window.commands.execute('file.save');
+      const p = saves[saves.length - 1] || {};
+      out.savedShapes = (p.shapes || []).map(s => s.kind).sort();
+      out.noShapeStrokes = (p.strokes || []).length === 0;
+      const loading = await import('./js/app/document-loading.js');
+      loading.handlePdfLoadResult('shapes.pdf', '/tmp/shapes.pdf', {
+        page_infos: window.state.pageInfos, loaded_strokes: [], loaded_shapes: p.shapes, outline: [] });
+      const back = window.state.strokes.filter(s => s.shape && !s.deleted);
+      out.reopened = back.map(s => s.shape.kind).sort();
+      const r2 = back.find(s => s.shape.kind === 'rect');
+      out.reopenedStyle = !!r2 && Array.isArray(r2.shape.fill) && r2.shape.cornerRadius > 0 && r2.points[0].sk === 'rect';
+      window.toolManager.setTool('pen');
+      window.state.selectedStrokes = [];
+      window.documentOps.setDocument({ pageInfos: window.state.pageInfos, strokes: [], images: [], textObjects: [], bookmarks: [] });
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    s = shape_res
+    check("canvas shape geometry matches the Rust writer for every fixture",
+          s["crossCheck"]["cases"] == 8 and not s["crossCheck"]["mismatches"], f"cc={s['crossCheck']}")
+    check("each shape tool kind creates a parametric shape and journals it",
+          s["created"] == ["rect", "ellipse", "polygon", "line", "arrow"] and s["journalled"] == s["created"]
+          and s["controlPoints"] == [3, 3, 3, 2, 2], f"res={s}")
+    check("shapes are hit on their outline (and inside only when filled)",
+          s["hitOutline"] and s["missCentreUnfilled"] and s["hitInsideFilled"], f"res={s}")
+    check("selection popover offers shape styles; fill, dash and rounding apply and are journalled",
+          s["styleShown"] and s["arrowHiddenForRect"] and s["styled"] and s["styleJournalled"], f"res={s}")
+    check("each restyle is one undo step, and redo restores it", s["undoOne"] and s["redo"], f"res={s}")
+    check("a lasso move maps a shape's control points and journals the shape",
+          s["moved"] and s["moveJournalled"], f"res={s}")
+    check("a partial erase removes a shape whole", s["erasedWhole"], f"res={s}")
+    check("save sends shapes as ShapeObjects; reopening restores kind and style",
+          s["savedShapes"] == ["arrow", "ellipse", "line", "rect"] and s["noShapeStrokes"]
+          and s["reopened"] == ["arrow", "ellipse", "line", "rect"] and s["reopenedStyle"], f"res={s}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)

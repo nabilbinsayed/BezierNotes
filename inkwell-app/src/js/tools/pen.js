@@ -9,6 +9,7 @@ import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
 import { latency, recordDraw } from '../dev/latency.js';
+import * as shapesModel from '../core/shapes-model.js';
 
 // ---- Incremental wet-stroke geometry -------------------------------------
 // Freezing the completed prefix of a long stroke into Path2D chunks means each
@@ -238,7 +239,8 @@ export function onPenMove(e, ptWorld, pane, viewport, options = {}) {
 
 export function onPenUp(e, viewport) {
   if (!state.cur) return;
-  const stroke = state.cur;
+  const snapped = state.holdSnappedShape;
+  const stroke = snappedToShape(state.cur, snapped) || state.cur;
   state.cur = null;
   state.streamline = null;
   state.penWarmup = 0;
@@ -270,6 +272,39 @@ export function onPenUp(e, viewport) {
   } else {
     compositor.clearWet();
   }
+}
+
+/**
+ * Plan 095: a hold-to-snap result becomes a parametric shape (with the same
+ * id, colour and width), so it can be edited as a shape. Null if `snapped`
+ * is not a shape this can describe.
+ */
+function snappedToShape(stroke, snapped) {
+  if (!snapped || !stroke || !stroke.points || stroke.points.length < 2) return null;
+  const pts = stroke.points;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+  }
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  let kind, points;
+  if (snapped.kind === 'line') {
+    kind = 'line';
+    points = [[pts[0].x, pts[0].y], [pts[pts.length - 1].x, pts[pts.length - 1].y]];
+  } else if (snapped.kind === 'rect' || snapped.kind === 'ellipse') {
+    kind = snapped.kind;
+    points = [[cx, cy], [maxX, cy], [cx, maxY]];
+  } else if (snapped.kind === 'triangle' && Array.isArray(snapped.corners) && snapped.corners.length >= 3) {
+    kind = 'polygon';
+    points = snapped.corners.slice(0, 3).map(c => [c.x !== undefined ? c.x : c[0], c.y !== undefined ? c.y : c[1]]);
+  } else {
+    return null;
+  }
+  return shapesModel.makeShapeStroke({
+    id: stroke.id, kind, sheet: stroke.sheet || 0, points,
+    rgb: stroke.rgb, width: stroke.base_width || 1.6,
+  });
 }
 
 export function onPenCancel() {

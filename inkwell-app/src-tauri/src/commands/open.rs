@@ -188,6 +188,12 @@ fn replay_wal_journal(
                         doc.remove_text(&id);
                         texts_map.remove(&id);
                     }
+                    WalEntry::ShapeUpsert { shape } => {
+                        doc.upsert_shape(shape.sheet, shape);
+                    }
+                    WalEntry::ShapeRemoved { id } => {
+                        doc.remove_shape(&id);
+                    }
                 }
             }
         }
@@ -314,6 +320,7 @@ pub async fn open_pdf(
     }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
+    let loaded_shapes: Vec<inkwell_core::shape::ShapeObject> = doc.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect();
     let doc_bookmarks = doc.bookmarks.clone();
 
     *state.doc.lock().unwrap() = Some(doc);
@@ -352,6 +359,7 @@ pub async fn open_pdf(
         loaded_strokes,
         loaded_images,
         loaded_texts,
+        loaded_shapes,
         outline,
         bookmarks: doc_bookmarks,
         shelved_journal_entries,
@@ -479,6 +487,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
+    let loaded_shapes: Vec<inkwell_core::shape::ShapeObject> = doc.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect();
     let doc_bookmarks = doc.bookmarks.clone();
 
     *state.doc.lock().unwrap() = Some(doc);
@@ -516,6 +525,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         loaded_strokes,
         loaded_images,
         loaded_texts,
+        loaded_shapes,
         outline,
         bookmarks: doc_bookmarks,
         shelved_journal_entries: 0,

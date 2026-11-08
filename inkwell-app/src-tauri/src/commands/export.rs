@@ -69,6 +69,7 @@ pub async fn export_pdf_custom(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     selected_pages: Option<Vec<u32>>,
     flatten: Option<bool>,
     state: State<'_, AppState>,
@@ -91,7 +92,7 @@ pub async fn export_pdf_custom(
         }
     }
 
-    apply_frontend_payload(state.inner(), images, strokes, texts, bookmarks)?;
+    apply_frontend_payload(state.inner(), images, strokes, texts, bookmarks, shapes)?;
 
     let doc_guard = state.doc.lock().unwrap();
     let live_doc = doc_guard.as_ref().ok_or("No document open")?;
@@ -165,6 +166,7 @@ pub async fn export_pdf_custom_dialog(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     selected_pages: Option<Vec<u32>>,
     flatten: Option<bool>,
     window: tauri::Window,
@@ -197,7 +199,7 @@ pub async fn export_pdf_custom_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        export_pdf_custom(path_str, images, strokes, texts, bookmarks, selected_pages, flatten, state).await
+        export_pdf_custom(path_str, images, strokes, texts, bookmarks, shapes, selected_pages, flatten, state).await
     } else {
         Err("CANCELLED".to_string())
     }

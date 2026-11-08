@@ -59,6 +59,7 @@ pub async fn save_pdf(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     journal_seq: Option<u64>,
     window: tauri::Window,
     state: State<'_, AppState>,
@@ -71,7 +72,7 @@ pub async fn save_pdf(
     // every other IPC that needed one (Plan 090). The whole save runs on the
     // blocking pool instead, under `save_lock` from snapshot to publish.
     let app = { use tauri::Manager; window.app_handle().clone() };
-    let payload = (images, strokes, texts, bookmarks);
+    let payload = (images, strokes, texts, bookmarks, shapes);
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Manager;
         let state = app.state::<AppState>();
@@ -97,6 +98,7 @@ type SavePayload = (
     Option<Vec<FrontendStroke>>,
     Option<Vec<FrontendText>>,
     Option<Vec<inkwell_core::doc::Bookmark>>,
+    Option<Vec<inkwell_core::shape::ShapeObject>>,
 );
 
 fn validate_save_path(p: &str) -> Result<PathBuf, String> {
@@ -139,8 +141,8 @@ fn save_blocking(
         return Ok(SaveOutcome { path: target_path, repair_backup: None });
     }
 
-    let (images, strokes, texts, bookmarks) = payload;
-    apply_frontend_payload(state, images, strokes, texts, bookmarks)?;
+    let (images, strokes, texts, bookmarks, shapes) = payload;
+    apply_frontend_payload(state, images, strokes, texts, bookmarks, shapes)?;
     // Clocks are stamped here, at the persistence boundary: every object
     // that appeared, changed or vanished since the last load or save gets a
     // fresh Lamport value from this device (Plan 091).
@@ -245,6 +247,7 @@ pub async fn save_pdf_dialog(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
     journal_seq: Option<u64>,
     default_name: Option<String>,
     window: tauri::Window,
@@ -265,7 +268,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), images, strokes, texts, bookmarks, journal_seq, window, state).await
+        save_pdf(Some(path_str), images, strokes, texts, bookmarks, shapes, journal_seq, window, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -321,7 +324,7 @@ mod save_pipeline_tests {
         let generation = state.save_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
 
         // The snapshot reflects edits up to seq 2; edit 3 arrived mid-save.
-        save_blocking(&state, generation, None, (None, None, None, None), Some(2)).expect("save");
+        save_blocking(&state, generation, None, (None, None, None, None, None), Some(2)).expect("save");
 
         let saved = std::fs::read(&target).unwrap();
         assert!(saved.starts_with(&fixture()), "original bytes preserved");
@@ -337,8 +340,23 @@ mod save_pipeline_tests {
         let (state, target, _journal) = session(dir.path());
         let before = std::fs::read(&target).unwrap();
         state.save_generation.store(5, std::sync::atomic::Ordering::Release);
-        save_blocking(&state, 4, None, (None, None, None, None), Some(0)).expect("superseded save is not an error");
+        save_blocking(&state, 4, None, (None, None, None, None, None), Some(0)).expect("superseded save is not an error");
         assert_eq!(std::fs::read(&target).unwrap(), before, "an older snapshot must not reach disk");
+    }
+
+    /// Plan 095: shapes in the save payload become native annotations and
+    /// come back from the sidecar.
+    #[test]
+    fn shapes_in_the_payload_are_saved_as_native_annotations() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, target, _journal) = session(dir.path());
+        let shapes: Vec<inkwell_core::shape::ShapeObject> =
+            inkwell_core::shape::fixtures().into_iter().take(1).collect();
+        let generation = state.save_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+        save_blocking(&state, generation, None, (None, None, None, None, Some(shapes.clone())), None).expect("save");
+        let saved = std::fs::read(&target).unwrap();
+        assert!(String::from_utf8_lossy(&saved).contains("/Subtype /Square"));
+        assert_eq!(saved_doc(&target).sheets[0].shapes, shapes);
     }
 
     fn saved_doc(target: &Path) -> Document {
@@ -385,7 +403,7 @@ mod save_pipeline_tests {
             });
             d.bookmarks.push(inkwell_core::doc::Bookmark { id: "bm".into(), page: 0, label: "Intro".into(), created_at: 9 });
         }
-        save_with(&state, (None, None, None, None));
+        save_with(&state, (None, None, None, None, None));
         let first = saved_doc(&target);
         assert!(first.clock > 0 && first.clock_of(&ObjectId::Stroke(a.id)).created.lamport > 0);
         let me = state.device.lock().unwrap().id;
@@ -393,7 +411,7 @@ mod save_pipeline_tests {
 
         // reopen, as open_pdf does, and save the frontend's unchanged copy
         *state.doc.lock().unwrap() = Some(first.clone());
-        let unchanged = |d: &Document| (Some(extract_frontend_images(d)), Some(extract_frontend_strokes(d)), Some(extract_frontend_texts(d)), Some(d.bookmarks.clone()));
+        let unchanged = |d: &Document| (Some(extract_frontend_images(d)), Some(extract_frontend_strokes(d)), Some(extract_frontend_texts(d)), Some(d.bookmarks.clone()), Some(d.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect()));
         save_with(&state, unchanged(&first));
         let second = saved_doc(&target);
         assert_eq!(second.clock, first.clock, "a round trip through the frontend is not an edit");

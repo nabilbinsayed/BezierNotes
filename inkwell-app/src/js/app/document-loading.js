@@ -14,6 +14,7 @@ import * as toolbar from '../ui/toolbar.js';
 import * as drawers from '../ui/drawers.js';
 import { getViewport } from '../app/viewport-ref.js';
 import { checkForConflictCopies } from '../ui/merge.js';
+import * as shapesModel from '../core/shapes-model.js';
 
 export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations = false } = {}) {
   if (!res) { hideOpenProgress(); return; }
@@ -25,7 +26,8 @@ export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations =
   const liveTexts = preserveAnnotations ? (state.textObjects || []).slice() : null;
   const liveBookmarks = preserveAnnotations ? (state.bookmarks || []).slice() : null;
   const pageInfos = res.page_infos || (Array.isArray(res) ? res : []);
-  const loadedStrokes = res.loaded_strokes || [];
+  // Plan 095: shapes live in the stroke list as shape strokes.
+  const loadedStrokes = (res.loaded_strokes || []).concat((res.loaded_shapes || []).map(shapesModel.fromBackendShape));
   const loadedImages = res.loaded_images || [];
   const loadedTexts = res.loaded_texts || [];
   const outline = res.outline || [];

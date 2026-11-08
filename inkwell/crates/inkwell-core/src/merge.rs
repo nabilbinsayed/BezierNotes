@@ -20,7 +20,7 @@
 //! PDF; `merge_files` checks the latter.
 
 use crate::clock::{Clock, ObjClock, ObjectId, Peer, Tombstone};
-use crate::doc::{Bookmark, Document, ImageObject, Sheet, TextObject};
+use crate::doc::{Bookmark, Document, ImageObject, ShapeObject, Sheet, TextObject};
 use crate::ink::Stroke;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -103,6 +103,7 @@ enum ObjRef<'d> {
     Image(&'d ImageObject),
     Text(&'d TextObject),
     Bookmark(&'d Bookmark),
+    Shape(&'d ShapeObject),
 }
 
 #[derive(Clone, Copy)]
@@ -158,6 +159,9 @@ fn collect<'d>(doc: &'d Document, side: Side) -> Result<HashMap<ObjectId, Versio
         for (ti, t) in sh.text_objects.iter().enumerate() {
             put(ObjectId::Text(t.id.clone()), p, 0, ti, ObjRef::Text(t))?;
         }
+        for (hi, s) in sh.shapes.iter().enumerate() {
+            put(ObjectId::Shape(s.id.clone()), p, 0, hi, ObjRef::Shape(s))?;
+        }
     }
     for (bi, b) in doc.bookmarks.iter().enumerate() {
         // Bookmarks point at a page index; carry the page's identity instead.
@@ -174,6 +178,7 @@ fn summary(v: &Version<'_>) -> String {
         ObjRef::Page(_) => "page settings".into(),
         ObjRef::Stroke(_) => "ink moved or restyled".into(),
         ObjRef::Image(_) => "image moved or resized".into(),
+        ObjRef::Shape(_) => "shape moved or restyled".into(),
     }
 }
 
@@ -264,6 +269,7 @@ pub fn merge(ours: &Document, theirs: &Document) -> Result<MergeResult, MergeErr
         }
         s.images.clear();
         s.text_objects.clear();
+        s.shapes.clear();
         doc.sheets.push(s);
         page_index.insert(*p, i);
     }
@@ -294,6 +300,12 @@ pub fn merge(ours: &Document, theirs: &Document) -> Result<MergeResult, MergeErr
                 let mut t = t.clone();
                 t.sheet = pi;
                 doc.sheets[pi].text_objects.push(t);
+            }
+            ObjRef::Shape(sh) => {
+                let pi = pi.expect("a live object's page is live");
+                let mut sh = sh.clone();
+                sh.sheet = pi;
+                doc.sheets[pi].shapes.push(sh);
             }
             ObjRef::Bookmark(b) => {
                 let mut b = b.clone();

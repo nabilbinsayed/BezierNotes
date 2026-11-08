@@ -61,6 +61,7 @@ pub enum ObjectId {
     Text(String),
     Bookmark(String),
     Page(u128),
+    Shape(String),
 }
 
 impl fmt::Display for ObjectId {
@@ -71,6 +72,7 @@ impl fmt::Display for ObjectId {
             ObjectId::Text(id) => write!(f, "t:{id}"),
             ObjectId::Bookmark(id) => write!(f, "b:{id}"),
             ObjectId::Page(id) => write!(f, "p:{id:032x}"),
+            ObjectId::Shape(id) => write!(f, "h:{id}"),
         }
     }
 }
@@ -86,6 +88,7 @@ impl std::str::FromStr for ObjectId {
             "t" => ObjectId::Text(rest.to_string()),
             "b" => ObjectId::Bookmark(rest.to_string()),
             "p" => ObjectId::Page(hex(rest)?),
+            "h" => ObjectId::Shape(rest.to_string()),
             _ => return Err(format!("bad object id {s:?}")),
         })
     }

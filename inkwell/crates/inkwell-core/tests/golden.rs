@@ -163,6 +163,16 @@ fn doc_with(strokes: Vec<Stroke>, texts: Vec<TextObject>) -> Document {
 }
 
 #[test]
+fn golden_shapes() {
+    // one of every native subtype (Plan 095)
+    let mut d = doc_with(vec![], vec![]);
+    for s in inkwell_core::shape::fixtures() {
+        d.upsert_shape(0, s);
+    }
+    check("shapes", &d);
+}
+
+#[test]
 fn golden_single_dot() {
     check("single_dot", &doc_with(vec![stroke(1, ToolKind::Pen, 4.0, &[(200.0, 200.0, 0.7)])], vec![]));
 }

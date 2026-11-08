@@ -7,6 +7,8 @@ import { state, $ } from '../core/state.js';
 import * as commandsModule from '../core/commands.js';
 import * as overlays from '../render/overlays.js';
 import { getViewport } from '../app/viewport-ref.js';
+import * as documentOps from '../core/document.js';
+import * as compositor from '../render/compositor.js';
 
 export function updateTextSelectionPopover() {
   const pop = $('textSelectionPopover');
@@ -87,13 +89,99 @@ export function updateLassoSelectionPopover() {
       pop.style.top = (syBottom + 10) + 'px';
       pop.style.transform = 'translate(-50%, 0)';
     }
+    updateShapeStyleControls();
     pop.classList.remove('hidden');
   } else {
     pop.classList.add('hidden');
   }
 }
 
+// ---- Shape style (Plan 095) ----
+
+const CLOSED = ['rect', 'ellipse', 'polygon'];
+
+function selectedShapes() {
+  return (state.selectedStrokes || []).filter(s => s && s.shape && !s.deleted);
+}
+
+function shapeControlState(shapes) {
+  const closed = shapes.filter(s => CLOSED.includes(s.shape.kind));
+  const rects = shapes.filter(s => s.shape.kind === 'rect');
+  const lines = shapes.filter(s => s.shape.kind === 'line' || s.shape.kind === 'arrow');
+  const all = (list, f) => list.length > 0 && list.every(f);
+  return {
+    fill: { show: closed.length > 0, on: all(closed, s => Array.isArray(s.shape.fill)) },
+    dash: { show: shapes.length > 0, on: all(shapes, s => Array.isArray(s.shape.dash) && s.shape.dash.length > 0) },
+    round: { show: rects.length > 0, on: all(rects, s => (s.shape.cornerRadius || 0) > 0) },
+    arrow: { show: lines.length > 0, on: all(lines, s => !!s.shape.arrowEnd) },
+    closed, rects, lines,
+  };
+}
+
+function updateShapeStyleControls() {
+  const group = $('lassoShapeStyle');
+  if (!group) return;
+  const shapes = selectedShapes();
+  group.classList.toggle('hidden', shapes.length === 0);
+  if (!shapes.length) return;
+  const st = shapeControlState(shapes);
+  for (const [id, key] of [['btnShapeFill', 'fill'], ['btnShapeDash', 'dash'], ['btnShapeRound', 'round'], ['btnShapeArrow', 'arrow']]) {
+    const b = $(id);
+    if (!b) continue;
+    b.classList.toggle('hidden', !st[key].show);
+    b.setAttribute('aria-pressed', st[key].on ? 'true' : 'false');
+  }
+}
+
+function restyle(targets, change) {
+  if (documentOps.restyleShapes(targets, change)) {
+    compositor.scheduleRedrawAll();
+    updateShapeStyleControls();
+  }
+}
+
+/** Toggle a style across the selected shapes (on for all unless all have it). */
+export function toggleShapeStyle(key) {
+  const shapes = selectedShapes();
+  const st = shapeControlState(shapes);
+  if (key === 'fill') {
+    const on = !st.fill.on;
+    restyle(st.closed, style => {
+      // a light tint of the outline colour keeps the outline readable
+      style.shape.fill = on ? style.rgb.map(c => +(c * 0.25 + 0.75).toFixed(3)) : null;
+    });
+  } else if (key === 'dash') {
+    const on = !st.dash.on;
+    restyle(shapes, style => {
+      const w = Math.max(1, style.base_width || 1.6);
+      style.shape.dash = on ? [+(w * 3).toFixed(2), +(w * 2).toFixed(2)] : null;
+    });
+  } else if (key === 'round') {
+    const on = !st.round.on;
+    restyle(st.rects, (style, s) => {
+      const [c, a, b] = s.points;
+      const half = Math.min(Math.hypot(a.x - c.x, a.y - c.y), Math.hypot(b.x - c.x, b.y - c.y));
+      style.shape.cornerRadius = on ? +Math.min(12, half * 0.35).toFixed(2) : 0;
+    });
+  } else if (key === 'arrow') {
+    const on = !st.arrow.on;
+    restyle(st.lines, style => {
+      style.shape.arrowEnd = on;
+      style.shape.kind = on ? 'arrow' : 'line';
+    });
+  } else if (key === 'pen') {
+    restyle(shapes, style => {
+      style.rgb = [...(state.color || style.rgb)];
+      style.base_width = state.baseWidth || style.base_width;
+    });
+  }
+}
+
 export function initLassoSelectionPopover() {
+  for (const [id, key] of [['btnShapeFill', 'fill'], ['btnShapeDash', 'dash'], ['btnShapeRound', 'round'], ['btnShapeArrow', 'arrow'], ['btnShapePenStyle', 'pen']]) {
+    const b = $(id);
+    if (b) b.addEventListener('click', () => toggleShapeStyle(key));
+  }
   $('btnLassoCopy') && $('btnLassoCopy').addEventListener('click', () => {
     commandsModule.commands.execute('edit.copy');
   });

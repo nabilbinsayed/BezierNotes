@@ -461,7 +461,7 @@ function selectObjectsInPolygon(polygon, viewport) {
         continue;
       }
     }
-    const pts = s.points || s._pts || [];
+    const pts = window.Ink && window.Ink.hitPoints ? window.Ink.hitPoints(s) : (s.points || s._pts || []);
     for (const pt of pts) {
       const wx = pl.x + pt.x;
       const wy = pl.y + pt.y;
@@ -555,10 +555,11 @@ export function findObjectAtWorld(wx, wy, viewport, radius = 10) {
                    py < s.bbox[1] - pad || py > s.bbox[3] + pad)) {
       continue;
     }
-    const pts = s.points || s._pts || [];
+    const pts = window.Ink && window.Ink.hitPoints ? window.Ink.hitPoints(s) : (s.points || s._pts || []);
     if (!pts.length) continue;
 
-    let hit = false;
+    // a filled shape is hit anywhere inside it
+    let hit = !!(s.shape && window.Ink && window.Ink.shapeContains && window.Ink.shapeContains(s, px, py));
     for (let j = 0; j < pts.length; j++) {
       const sx = pl.x + pts[j].x;
       const sy = pl.y + pts[j].y;

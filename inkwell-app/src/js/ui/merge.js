@@ -17,6 +17,7 @@ import * as ipc from '../core/ipc.js';
 import * as documentOps from '../core/document.js';
 import * as toast from './toast.js';
 import * as commandsModule from '../core/commands.js';
+import * as shapesModel from '../core/shapes-model.js';
 
 /** Incoming ink stays highlighted this long after a merge. */
 export const HIGHLIGHT_MS = 2000;
@@ -235,7 +236,7 @@ export async function applyPendingMerge() {
   if (!res) return false;
 
   documentOps.replaceAnnotations({
-    strokes: res.strokes || [],
+    strokes: (res.strokes || []).concat((res.shapes || []).map(shapesModel.fromBackendShape)),
     images: res.images || [],
     textObjects: res.texts || [],
     bookmarks: (res.bookmarks || []).map(b => ({

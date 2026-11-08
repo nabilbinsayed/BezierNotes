@@ -71,6 +71,13 @@ fn ink_doc(n_pages: usize) -> Document {
             height: 30.0,
         },
     );
+    // Plan 095 shapes: their /AP must render alike in both engines too
+    // (fills darkened: the masks threshold grayscale renders, and each engine
+    // converts a light colour to gray a little differently)
+    for mut s in inkwell_core::shape::fixtures() {
+        s.fill_rgb = s.fill_rgb.map(|f| f.map(|c| c * 0.3));
+        d.upsert_shape(0, s);
+    }
     d
 }
 
@@ -224,3 +231,4 @@ fn ink_renders_the_same_in_pdfium_and_ghostscript() {
         assert!(score >= MIN_IOU, "{rel}: renderers disagree on where the ink is (agreement {score:.3} < {MIN_IOU})");
     }
 }
+

@@ -6055,3 +6055,18 @@ body.presentation-mode .stage {
   color: #94a3b8;
   font-size: 11px;
 }
+
+/* ---- Shape style controls in the selection popover (Plan 095) ---- */
+.lasso-shape-style {
+  display: contents;
+}
+
+.lasso-shape-style.hidden,
+.lasso-shape-style .sel-action-btn.hidden {
+  display: none;
+}
+
+.lasso-shape-style .sel-action-btn[aria-pressed="true"] {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}

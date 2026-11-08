@@ -117,8 +117,54 @@ pub async fn delete_stroke(stroke_id_str: String, seq: Option<u64>,
             let _ = tx.send(WalOp::Append(WalEntry::Removed(id), seq));
         }
         state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        return Ok(true);
     }
-    Ok(removed)
+    // The frontend keeps shapes in its stroke list (Plan 095): a delete of
+    // one arrives here too.
+    if doc.remove_shape(&stroke_id_str) {
+        if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+            let _ = tx.send(WalOp::Append(WalEntry::ShapeRemoved { id: stroke_id_str }, seq));
+        }
+        state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Create or edit a shape (`op` = "upsert") or delete one ("remove"),
+/// journalled like a stroke commit.
+#[tauri::command]
+pub async fn journal_shape_mutation(
+    op: String,
+    shape: Option<inkwell_core::shape::ShapeObject>,
+    shape_id: Option<String>,
+    seq: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    let entry = match op.as_str() {
+        "upsert" | "add" => {
+            let s = shape.ok_or("upsert needs a shape")?;
+            if s.sheet > 10_000 || s.points.len() < 2 || s.points.len() > 10_000 {
+                return Err("invalid shape".to_string());
+            }
+            doc.upsert_shape(s.sheet, s.clone());
+            WalEntry::ShapeUpsert { shape: s }
+        }
+        "remove" | "delete" => {
+            let id = shape_id.ok_or("remove needs a shape id")?;
+            doc.remove_shape(&id);
+            WalEntry::ShapeRemoved { id }
+        }
+        other => return Err(format!("unknown shape op {other:?}")),
+    };
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(entry, seq));
+    }
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -244,6 +290,7 @@ pub(super) fn apply_frontend_payload(
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     bookmarks: Option<Vec<inkwell_core::doc::Bookmark>>,
+    shapes: Option<Vec<inkwell_core::shape::ShapeObject>>,
 ) -> Result<(), String> {
     // If frontend provided the active stroke list, sync doc state completely
     if let Some(ref stroke_list) = strokes {
@@ -340,6 +387,22 @@ pub(super) fn apply_frontend_payload(
         let mut doc_guard = state.doc.lock().unwrap();
         if let Some(doc) = doc_guard.as_mut() {
             doc.bookmarks = bm_list.clone();
+        }
+    }
+
+    // Parametric shapes (Plan 095): the frontend's list is authoritative.
+    if let Some(shape_list) = shapes {
+        if shape_list.iter().any(|s| s.sheet > 10_000) {
+            return Err("shape sheet index out of bounds".to_string());
+        }
+        let mut doc_guard = state.doc.lock().unwrap();
+        if let Some(doc) = doc_guard.as_mut() {
+            for sheet in &mut doc.sheets {
+                sheet.shapes.clear();
+            }
+            for s in shape_list {
+                doc.upsert_shape(s.sheet, s);
+            }
         }
     }
 

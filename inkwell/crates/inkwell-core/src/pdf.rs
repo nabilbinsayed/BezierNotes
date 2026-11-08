@@ -168,6 +168,11 @@ impl PdfFile {
         }
     }
 
+    /// The box (CropBox, else MediaBox) of the page at `index`.
+    pub fn page_box_at(&self, index: usize) -> Option<[f64; 4]> {
+        self.pages.get(index).map(|n| self.page_box(*n))
+    }
+
     pub fn page_box(&self, page_num: u32) -> [f64; 4] {
         let mut cur_obj = page_num;
         let mut depth = 0;
@@ -291,7 +296,15 @@ impl PdfFile {
                 }
             }
 
-            // 4. Text objects / annotations (top layer)
+            // 4. Parametric shapes (Plan 095): native /Square, /Circle,
+            //    /Line, /Polygon, /PolyLine with /AP
+            for shape in &sheet.shapes {
+                if let Some(a) = self.emit_shape_annot(shape, pbox) {
+                    annots.push(a);
+                }
+            }
+
+            // 5. Text objects / annotations (top layer)
             for txt in &sheet.text_objects {
                 if !txt.text.trim().is_empty() {
                     if let Some(a) = self.emit_text_annot(txt, pbox) {
@@ -677,6 +690,145 @@ impl PdfFile {
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
                 fmt_rect(&annot_rect),
                 fs, cr, cg, cb
+            )
+            .into_bytes(),
+        );
+        Some(annot)
+    }
+
+    /// One shape as the native annotation type a reader would use for it,
+    /// with an `/AP` drawn from `ShapeObject::outline`, the same geometry the
+    /// canvas draws. The native keys describe the same shape, so a reader that
+    /// regenerates appearances (or lists comments) agrees with the `/AP`:
+    /// rects and ellipses that aren't axis-aligned become `/Polygon`s, since
+    /// `/Square` and `/Circle` can only describe page-aligned ones. A rounded
+    /// rect stays a `/Square` (its corners are in the `/AP` only).
+    fn emit_shape_annot(&mut self, s: &crate::shape::ShapeObject, page_box: [f64; 4]) -> Option<u32> {
+        use crate::shape::{PathCmd, ShapeKind};
+        if s.points.len() < 2 || !s.points.iter().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
+        let (llx, ury) = (page_box[0], page_box[3]);
+        let pt = |q: [f64; 2]| -> [f64; 2] { [llx + q[0], ury - q[1]] };
+        let num = |v: f64| fmt_coord(v);
+        let b = s.bbox();
+        // /Rect: the drawn bounds in PDF space, a little slack for joins
+        let slack = s.stroke_width.max(0.0) * 0.5 + 0.5;
+        let rect = [llx + b[0] - slack, ury - b[3] - slack, llx + b[2] + slack, ury - b[1] + slack];
+
+        let width = s.stroke_width.max(0.0);
+        let opacity = s.opacity.clamp(0.0, 1.0);
+        let [sr, sg, sb] = s.stroke_rgb.map(|c| c.clamp(0.0, 1.0));
+        let fill = if s.is_closed() { s.fill_rgb.map(|f| f.map(|c| c.clamp(0.0, 1.0))) } else { None };
+        let dash: Vec<f64> = s.dash.clone().unwrap_or_default().into_iter().filter(|d| d.is_finite() && *d >= 0.0).collect();
+        let dash_arr = dash.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" ");
+
+        // ---- appearance ------------------------------------------------
+        let mut c = Vec::new();
+        let _ = writeln!(c, "q");
+        if opacity < 1.0 {
+            let _ = writeln!(c, "/GS0 gs");
+        }
+        // Round caps and joins, except that a dashed stroke gets butt caps:
+        // round caps would grow every dash by the stroke width and close the
+        // gaps. `ink.js` `drawShape` does the same.
+        let cap = if dash.is_empty() { 1 } else { 0 };
+        let _ = writeln!(c, "{:.3} {:.3} {:.3} RG {} w {cap} J 1 j", sr, sg, sb, num(width));
+        if !dash.is_empty() {
+            let _ = writeln!(c, "[{dash_arr}] 0 d");
+        }
+        if let Some([fr, fg, fb]) = fill {
+            let _ = writeln!(c, "{fr:.3} {fg:.3} {fb:.3} rg");
+        }
+        for cmd in s.outline() {
+            match cmd {
+                PathCmd::MoveTo(q) => {
+                    let q = pt(q);
+                    let _ = writeln!(c, "{} {} m", num(q[0]), num(q[1]));
+                }
+                PathCmd::LineTo(q) => {
+                    let q = pt(q);
+                    let _ = writeln!(c, "{} {} l", num(q[0]), num(q[1]));
+                }
+                PathCmd::CurveTo(a, bq, e) => {
+                    let (a, bq, e) = (pt(a), pt(bq), pt(e));
+                    let _ = writeln!(c, "{} {} {} {} {} {} c", num(a[0]), num(a[1]), num(bq[0]), num(bq[1]), num(e[0]), num(e[1]));
+                }
+                PathCmd::Close => {
+                    let _ = writeln!(c, "h");
+                }
+            }
+        }
+        let _ = writeln!(c, "{}", if fill.is_some() { "B" } else { "S" });
+        let heads = s.arrow_heads();
+        if !heads.is_empty() {
+            let _ = writeln!(c, "[] 0 d {sr:.3} {sg:.3} {sb:.3} rg");
+            for h in heads {
+                let [a, bq, e] = h.map(pt);
+                let _ = writeln!(c, "{} {} m {} {} l {} {} l h", num(a[0]), num(a[1]), num(bq[0]), num(bq[1]), num(e[0]), num(e[1]));
+            }
+            let _ = writeln!(c, "f");
+        }
+        let _ = writeln!(c, "Q");
+        let resources = if opacity < 1.0 {
+            format!("/Resources << /ExtGState << /GS0 << /Type /ExtGState /CA {opacity:.3} /ca {opacity:.3} >> >> >>")
+        } else {
+            "/Resources << >>".to_string()
+        };
+        // BBox = Rect, identity Matrix: the stream is in page space.
+        let ap = self.add_stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [{}] {resources}", fmt_rect(&rect)),
+            &c,
+            true,
+        );
+
+        // ---- native geometry ---------------------------------------------
+        let border = if dash.is_empty() {
+            format!("/BS << /Type /Border /W {} /S /S >>", num(width))
+        } else {
+            format!("/BS << /Type /Border /W {} /S /D /D [{dash_arr}] >>", num(width))
+        };
+        let colour = format!("/C [{sr:.3} {sg:.3} {sb:.3}]");
+        let interior = fill.map(|[r, g, bq]| format!(" /IC [{r:.3} {g:.3} {bq:.3}]")).unwrap_or_default();
+        let vertices = |pts: &[[f64; 2]]| {
+            pts.iter().map(|q| { let q = pt(*q); format!("{} {}", num(q[0]), num(q[1])) }).collect::<Vec<_>>().join(" ")
+        };
+        let aligned = s.axis_aligned_box();
+        let (subtype, geometry) = match s.kind {
+            ShapeKind::Rect | ShapeKind::Ellipse if aligned.is_some() => {
+                let a = aligned.unwrap_or_default();
+                // /RD: inset from /Rect to the shape's own bounds
+                let inner = [llx + a[0], ury - a[3], llx + a[2], ury - a[1]];
+                let rd = [inner[0] - rect[0], inner[1] - rect[1], rect[2] - inner[2], rect[3] - inner[3]]
+                    .map(|v| v.max(0.0));
+                let sub = if s.kind == ShapeKind::Rect { "/Square" } else { "/Circle" };
+                (sub, format!("/RD [{}]{interior}", fmt_rect(&rd)))
+            }
+            ShapeKind::Rect | ShapeKind::Ellipse => ("/Polygon", format!("/Vertices [{}]{interior}", vertices(&s.polygon_vertices()))),
+            ShapeKind::Polygon => ("/Polygon", format!("/Vertices [{}]{interior}", vertices(&s.points))),
+            ShapeKind::Polyline => ("/PolyLine", format!("/Vertices [{}]", vertices(&s.points))),
+            ShapeKind::Line | ShapeKind::Arrow => {
+                let (a, e) = (pt(s.points[0]), pt(s.points[1]));
+                let end = |on: bool| if on { "/ClosedArrow" } else { "/None" };
+                let ic = if s.arrow_start || s.arrow_end { format!(" /IC [{sr:.3} {sg:.3} {sb:.3}]") } else { String::new() };
+                (
+                    "/Line",
+                    format!(
+                        "/L [{} {} {} {}] /LE [{} {}]{ic}",
+                        num(a[0]), num(a[1]), num(e[0]), num(e[1]), end(s.arrow_start), end(s.arrow_end)
+                    ),
+                )
+            }
+        };
+        let raw_sid = if s.id.starts_with("shp_") { s.id.clone() } else { format!("shp_{}", s.id) };
+        let sid = escape_pdf_string(&raw_sid);
+        let nm = escape_pdf_string(&s.id);
+        // Opacity lives in the /AP's ExtGState only: a /CA here would multiply
+        // it again in every reader that honours /CA (Ghostscript does).
+        let annot = self.add(
+            format!(
+                "<< /Type /Annot /Subtype {subtype} /F 4 /Rect [{}] {geometry} {colour} {border} /T (BezierNotes) /NM ({nm}) /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
+                fmt_rect(&rect)
             )
             .into_bytes(),
         );

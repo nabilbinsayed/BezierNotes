@@ -52,6 +52,7 @@ pub mod ink;
 pub mod merge;
 pub mod pdf;
 pub mod pdfobj;
+pub mod shape;
 pub mod text_shape;
 pub mod tiles;
 pub mod wal;

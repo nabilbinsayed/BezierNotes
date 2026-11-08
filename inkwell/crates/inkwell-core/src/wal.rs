@@ -37,6 +37,8 @@ const KIND_IMAGE_ADD: u8 = 8;
 const KIND_IMAGE_REMOVE: u8 = 9;
 const KIND_TEXT_UPSERT: u8 = 10;
 const KIND_TEXT_REMOVE: u8 = 11;
+const KIND_SHAPE_UPSERT: u8 = 12;
+const KIND_SHAPE_REMOVE: u8 = 13;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WalEntry {
@@ -87,6 +89,13 @@ pub enum WalEntry {
         height: f64,
     },
     TextRemoved {
+        id: String,
+    },
+    /// Plan 095: a shape created or edited (carries its sheet).
+    ShapeUpsert {
+        shape: crate::shape::ShapeObject,
+    },
+    ShapeRemoved {
         id: String,
     },
 }
@@ -202,12 +211,16 @@ impl Wal {
             WalEntry::ImageAdded { .. }
             | WalEntry::ImageRemoved { .. }
             | WalEntry::TextUpsert { .. }
-            | WalEntry::TextRemoved { .. } => {
+            | WalEntry::TextRemoved { .. }
+            | WalEntry::ShapeUpsert { .. }
+            | WalEntry::ShapeRemoved { .. } => {
                 let kind = match entry {
                     WalEntry::ImageAdded { .. } => KIND_IMAGE_ADD,
                     WalEntry::ImageRemoved { .. } => KIND_IMAGE_REMOVE,
                     WalEntry::TextUpsert { .. } => KIND_TEXT_UPSERT,
                     WalEntry::TextRemoved { .. } => KIND_TEXT_REMOVE,
+                    WalEntry::ShapeUpsert { .. } => KIND_SHAPE_UPSERT,
+                    WalEntry::ShapeRemoved { .. } => KIND_SHAPE_REMOVE,
                     _ => unreachable!(),
                 };
                 let json_bytes = serde_json::to_vec(entry).unwrap_or_default();
@@ -303,7 +316,8 @@ impl Wal {
                     let clockwise = payload[4] != 0;
                     out.push(WalEntry::PageRotated { index, clockwise });
                 }
-                KIND_IMAGE_ADD | KIND_IMAGE_REMOVE | KIND_TEXT_UPSERT | KIND_TEXT_REMOVE => {
+                KIND_IMAGE_ADD | KIND_IMAGE_REMOVE | KIND_TEXT_UPSERT | KIND_TEXT_REMOVE | KIND_SHAPE_UPSERT
+                | KIND_SHAPE_REMOVE => {
                     if let Ok(entry) = serde_json::from_slice::<WalEntry>(payload) {
                         out.push(entry);
                     }

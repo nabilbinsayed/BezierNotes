@@ -247,6 +247,7 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
       p: (p.p !== undefined) ? p.p : 0.8,
       w: (p.w !== undefined) ? p.w : (s.base_width || 1.6),
       t: p.t || 0,
+      ...(p.sk ? { sk: p.sk } : {}),
     }));
     const baseW = s.base_width || s.baseWidth || 1.6;
     const clone = {
@@ -258,6 +259,7 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
       points: pts,
       _pts: pts,
       deleted: false,
+      ...(s.shape ? { shape: JSON.parse(JSON.stringify(s.shape)) } : {}),
     };
 
     if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
@@ -748,6 +750,30 @@ export function serializeSelectionToSvg() {
     const isHighlighter = s.kind === 'highlighter';
     const rgb = s.rgb || [0, 0, 0];
     const color = `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+
+    if (s.shape && window.Ink && typeof window.Ink.shapeOutline === 'function') {
+      // Plan 095: a shape is a stroked (and maybe filled) path, not a ribbon.
+      const sh = window.Ink.shapeOf(s);
+      const rec = new SvgPathRecorder(minX, minY);
+      for (const c of window.Ink.shapeOutline(sh)) {
+        if (c[0] === 'M') rec.moveTo(c[1], c[2]);
+        else if (c[0] === 'L') rec.lineTo(c[1], c[2]);
+        else if (c[0] === 'C') rec.bezierCurveTo(c[1], c[2], c[3], c[4], c[5], c[6]);
+        else rec.closePath();
+      }
+      const d = s.shape;
+      const fill = Array.isArray(d.fill) && (d.kind === 'rect' || d.kind === 'ellipse' || d.kind === 'polygon')
+        ? `rgb(${d.fill.map(v => Math.round(v * 255)).join(', ')})` : 'none';
+      const dash = Array.isArray(d.dash) && d.dash.length ? ` stroke-dasharray="${d.dash.join(' ')}" stroke-linecap="butt"` : ' stroke-linecap="round"';
+      const opacity = d.opacity !== undefined && d.opacity < 1 ? ` opacity="${d.opacity}"` : '';
+      svgElements += `  <path d="${rec.d.trim()}" fill="${fill}" stroke="${color}" stroke-width="${baseW}" stroke-linejoin="round"${dash}${opacity} />\n`;
+      for (const h of window.Ink.shapeArrowHeads(sh)) {
+        const hr = new SvgPathRecorder(minX, minY);
+        hr.moveTo(h[0][0], h[0][1]); hr.lineTo(h[1][0], h[1][1]); hr.lineTo(h[2][0], h[2][1]); hr.closePath();
+        svgElements += `  <path d="${hr.d.trim()}" fill="${color}"${opacity} />\n`;
+      }
+      continue;
+    }
 
     const recorder = new SvgPathRecorder(minX, minY);
     if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {

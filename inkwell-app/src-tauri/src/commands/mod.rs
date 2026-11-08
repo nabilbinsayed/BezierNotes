@@ -271,6 +271,9 @@ pub struct OpenPdfResult {
     pub loaded_strokes: Vec<FrontendStroke>,
     pub loaded_images: Vec<FrontendImage>,
     pub loaded_texts: Vec<FrontendText>,
+    /// Parametric shapes (Plan 095).
+    #[serde(default)]
+    pub loaded_shapes: Vec<inkwell_core::shape::ShapeObject>,
     pub outline: Vec<inkwell_pdf::TocItem>,
     #[serde(default)]
     pub bookmarks: Vec<inkwell_core::doc::Bookmark>,

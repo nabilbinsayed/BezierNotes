@@ -162,6 +162,14 @@ function smoothStrokePoints(pts, passes = 1) {
 
 function computeStrokeBbox(pts, baseWidth = 2.0) {
   if (!pts || !pts.length) return [0, 0, 0, 0];
+  // Shape control points (tagged `sk`, Plan 095): bound the drawn shape. The
+  // arrowhead flags aren't on the points, so lines are bounded as if both
+  // ends had heads (a slightly generous box is fine for culling and hits).
+  if (pts[0] && pts[0].sk) {
+    const k = pts[0].sk;
+    return shapeBbox({ kind: k, points: pts.map(p => [p.x, p.y]), stroke_width: baseWidth || 2.0,
+      arrow_start: k === 'line' || k === 'arrow', arrow_end: k === 'line' || k === 'arrow' });
+  }
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const halfW = (baseWidth || 2.0) / 2;
   for (let i = 0; i < pts.length; i++) {
@@ -945,6 +953,10 @@ function buildStrokeRecord(points, rgb, baseWidth, sheet = 0, kind = 'pen') {
 }
 
 function drawStroke(ctx, stroke) {
+  if (stroke.shape) {
+    drawShape(ctx, stroke);
+    return;
+  }
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return;
 
@@ -975,5 +987,245 @@ function drawStroke(ctx, stroke) {
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour, isAxisAlignedRect, smoothStrokePoints, recognizeFreehandShape, shapeLinePoints, buildStrokeRecord };
+// ---------------------------------------------------------------------------
+// Parametric shapes (Plan 095). A port of inkwell-core `shape.rs` (`outline`,
+// `arrow_heads`, `bbox`); `tests/golden/shape_paths.json` pins both, and the
+// smoke suite (T33) checks this side against it.
+//
+// In the frontend a shape is a stroke-like object with a `shape` descriptor:
+// `points` are its control points (line/arrow: [start, end]; rect/ellipse:
+// [centre, centre+u, centre+v]; polygon/polyline: vertices), each tagged
+// `sk: kind`, `rgb`/`base_width` are its stroke colour and width. Every
+// affine edit (move, scale, rotate) maps the points and stays exact.
+// ---------------------------------------------------------------------------
+
+const SHAPE_KAPPA = 0.5522847498307934;
+const SHAPE_ARROW_WING = 28 * Math.PI / 180;
+
+/** The `ShapeObject` view of a shape stroke (what the backend stores). */
+function shapeOf(stroke) {
+  const d = stroke.shape || {};
+  return {
+    kind: d.kind,
+    points: (stroke.points || []).map(p => [p.x, p.y]),
+    stroke_width: stroke.base_width || 1.6,
+    corner_radius: d.cornerRadius || 0,
+    arrow_start: !!d.arrowStart,
+    arrow_end: !!d.arrowEnd,
+  };
+}
+
+function shapeArrowLen(s) {
+  return Math.max(10, (s.stroke_width || 0) * 4.5);
+}
+
+function shapeAxes(s) {
+  if ((s.kind !== 'rect' && s.kind !== 'ellipse') || s.points.length < 3) return null;
+  const [c, a, b] = s.points;
+  return { c, u: [a[0] - c[0], a[1] - c[1]], v: [b[0] - c[0], b[1] - c[1]] };
+}
+
+/** Path commands, exactly as `ShapeObject::outline`: ['M',x,y] ['L',x,y] ['C',x1,y1,x2,y2,x,y] ['Z']. */
+function shapeOutline(s) {
+  const out = [];
+  const p = s.points;
+  if (s.kind === 'line' || s.kind === 'arrow') {
+    if (p.length < 2) return out;
+    let a = p[0], b = p[1];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l = Math.hypot(dx, dy);
+    const back = shapeArrowLen(s) * Math.cos(SHAPE_ARROW_WING);
+    if (l > 1e-9) {
+      const ex = dx / l, ey = dy / l;
+      if (s.arrow_start && l > back) a = [a[0] + ex * back, a[1] + ey * back];
+      if (s.arrow_end && l > back) b = [b[0] - ex * back, b[1] - ey * back];
+    }
+    out.push(['M', a[0], a[1]], ['L', b[0], b[1]]);
+  } else if (s.kind === 'rect') {
+    const ax = shapeAxes(s);
+    if (!ax) return out;
+    const { c, u, v } = ax;
+    const lu = Math.hypot(u[0], u[1]), lv = Math.hypot(v[0], v[1]);
+    const perpendicular = lu > 0 && lv > 0 && Math.abs((u[0] * v[0] + u[1] * v[1]) / (lu * lv)) < 1e-6;
+    const r = Math.max(0, Math.min(s.corner_radius || 0, Math.min(lu, lv)));
+    const at = (su, sv) => [c[0] + u[0] * su + v[0] * sv, c[1] + u[1] * su + v[1] * sv];
+    if (r > 1e-9 && perpendicular) {
+      const eu = [u[0] / lu, u[1] / lu], ev = [v[0] / lv, v[1] / lv];
+      const neg = q => [-q[0], -q[1]];
+      const k = SHAPE_KAPPA * r;
+      const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+      const dirs = [[neg(ev), eu], [eu, ev], [ev, neg(eu)], [neg(eu), neg(ev)]];
+      for (let i = 0; i < 4; i++) {
+        const q = at(signs[i][0], signs[i][1]);
+        const [inn, outd] = dirs[i];
+        const start = [q[0] - inn[0] * r, q[1] - inn[1] * r];
+        const end = [q[0] + outd[0] * r, q[1] + outd[1] * r];
+        out.push([i === 0 ? 'M' : 'L', start[0], start[1]]);
+        out.push(['C', start[0] + inn[0] * k, start[1] + inn[1] * k, end[0] - outd[0] * k, end[1] - outd[1] * k, end[0], end[1]]);
+      }
+      out.push(['Z']);
+    } else {
+      const cs = [at(-1, -1), at(1, -1), at(1, 1), at(-1, 1)];
+      out.push(['M', cs[0][0], cs[0][1]]);
+      for (let i = 1; i < 4; i++) out.push(['L', cs[i][0], cs[i][1]]);
+      out.push(['Z']);
+    }
+  } else if (s.kind === 'ellipse') {
+    const ax = shapeAxes(s);
+    if (!ax) return out;
+    const { c, u, v } = ax;
+    const at = (cu, sv) => [c[0] + u[0] * cu + v[0] * sv, c[1] + u[1] * cu + v[1] * sv];
+    const q = [at(1, 0), at(0, 1), at(-1, 0), at(0, -1)];
+    const tan = [v, [-u[0], -u[1]], [-v[0], -v[1]], u];
+    out.push(['M', q[0][0], q[0][1]]);
+    for (let i = 0; i < 4; i++) {
+      const a = q[i], b = q[(i + 1) % 4], ta = tan[i], tb = tan[(i + 1) % 4];
+      out.push(['C', a[0] + ta[0] * SHAPE_KAPPA, a[1] + ta[1] * SHAPE_KAPPA,
+        b[0] - tb[0] * SHAPE_KAPPA, b[1] - tb[1] * SHAPE_KAPPA, b[0], b[1]]);
+    }
+    out.push(['Z']);
+  } else if (s.kind === 'polygon' || s.kind === 'polyline') {
+    if (!p.length) return out;
+    out.push(['M', p[0][0], p[0][1]]);
+    for (let i = 1; i < p.length; i++) out.push(['L', p[i][0], p[i][1]]);
+    if (s.kind === 'polygon') out.push(['Z']);
+  }
+  return out;
+}
+
+/** Filled arrowhead triangles, tip first, as `ShapeObject::arrow_heads`. */
+function shapeArrowHeads(s) {
+  const out = [];
+  if ((s.kind !== 'line' && s.kind !== 'arrow') || s.points.length < 2) return out;
+  const [a, b] = s.points;
+  if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-9) return out;
+  const len = shapeArrowLen(s);
+  const head = (tip, from) => {
+    const ang = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
+    return [tip,
+      [tip[0] - len * Math.cos(ang - SHAPE_ARROW_WING), tip[1] - len * Math.sin(ang - SHAPE_ARROW_WING)],
+      [tip[0] - len * Math.cos(ang + SHAPE_ARROW_WING), tip[1] - len * Math.sin(ang + SHAPE_ARROW_WING)]];
+  };
+  if (s.arrow_start) out.push(head(a, b));
+  if (s.arrow_end) out.push(head(b, a));
+  return out;
+}
+
+/** [x0, y0, x1, y1] including half the stroke width, as `ShapeObject::bbox`. */
+function shapeBbox(s) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  const grow = q => { b[0] = Math.min(b[0], q[0]); b[1] = Math.min(b[1], q[1]); b[2] = Math.max(b[2], q[0]); b[3] = Math.max(b[3], q[1]); };
+  const ax = shapeAxes(s);
+  if (s.kind === 'ellipse' && ax) {
+    const hx = Math.hypot(ax.u[0], ax.v[0]), hy = Math.hypot(ax.u[1], ax.v[1]);
+    grow([ax.c[0] - hx, ax.c[1] - hy]);
+    grow([ax.c[0] + hx, ax.c[1] + hy]);
+  } else if (s.kind === 'rect' && ax) {
+    for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      grow([ax.c[0] + ax.u[0] * su + ax.v[0] * sv, ax.c[1] + ax.u[1] * su + ax.v[1] * sv]);
+    }
+  } else {
+    s.points.forEach(grow);
+  }
+  for (const h of shapeArrowHeads(s)) h.forEach(grow);
+  if (b[0] > b[2]) return [0, 0, 0, 0];
+  const hw = Math.max(0, s.stroke_width || 0) / 2;
+  return [b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw];
+}
+
+function shapePath2D(s) {
+  const path = new Path2D();
+  for (const c of shapeOutline(s)) {
+    if (c[0] === 'M') path.moveTo(c[1], c[2]);
+    else if (c[0] === 'L') path.lineTo(c[1], c[2]);
+    else if (c[0] === 'C') path.bezierCurveTo(c[1], c[2], c[3], c[4], c[5], c[6]);
+    else path.closePath();
+  }
+  return path;
+}
+
+const rgbCss = rgb => `rgb(${rgb.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})`;
+
+/** Draw a shape stroke as the PDF `/AP` does (pdf.rs `emit_shape_annot`). */
+function drawShape(ctx, stroke) {
+  const s = shapeOf(stroke);
+  const d = stroke.shape || {};
+  const rgb = Array.isArray(stroke.rgb) ? stroke.rgb : [0.08, 0.09, 0.14];
+  const closed = s.kind === 'rect' || s.kind === 'ellipse' || s.kind === 'polygon';
+  const dash = Array.isArray(d.dash) && d.dash.length ? d.dash : null;
+  ctx.save();
+  ctx.globalAlpha *= Math.max(0, Math.min(1, d.opacity === undefined ? 1 : d.opacity));
+  ctx.lineWidth = s.stroke_width;
+  ctx.lineJoin = 'round';
+  // butt caps when dashed, or the round caps would close the gaps
+  ctx.lineCap = dash ? 'butt' : 'round';
+  ctx.setLineDash(dash || []);
+  ctx.strokeStyle = rgbCss(rgb);
+  const path = shapePath2D(s);
+  if (closed && Array.isArray(d.fill)) {
+    ctx.fillStyle = rgbCss(d.fill);
+    ctx.fill(path);
+  }
+  ctx.stroke(path);
+  const heads = shapeArrowHeads(s);
+  if (heads.length) {
+    ctx.setLineDash([]);
+    ctx.fillStyle = rgbCss(rgb);
+    for (const h of heads) {
+      ctx.beginPath();
+      ctx.moveTo(h[0][0], h[0][1]);
+      ctx.lineTo(h[1][0], h[1][1]);
+      ctx.lineTo(h[2][0], h[2][1]);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Points to hit-test against: a stroke's samples, or a shape's outline
+ * sampled densely (its control points alone don't lie on what is drawn).
+ */
+function hitPoints(stroke) {
+  if (!stroke || !stroke.shape) return stroke ? (stroke.points || stroke._pts || []) : [];
+  const s = shapeOf(stroke);
+  const w = s.stroke_width;
+  const out = [];
+  let cur = null, first = null;
+  const push = q => out.push({ x: q[0], y: q[1], w });
+  for (const c of shapeOutline(s)) {
+    if (c[0] === 'M') { cur = [c[1], c[2]]; first = cur; push(cur); }
+    else if (c[0] === 'L' || c[0] === 'Z') {
+      const to = c[0] === 'L' ? [c[1], c[2]] : first;
+      if (!cur || !to) continue;
+      const n = Math.max(1, Math.ceil(Math.hypot(to[0] - cur[0], to[1] - cur[1]) / 4));
+      for (let i = 1; i <= n; i++) push([cur[0] + (to[0] - cur[0]) * i / n, cur[1] + (to[1] - cur[1]) * i / n]);
+      cur = to;
+    } else if (c[0] === 'C' && cur) {
+      for (let i = 1; i <= 12; i++) {
+        const t = i / 12, mt = 1 - t;
+        push([
+          mt * mt * mt * cur[0] + 3 * mt * mt * t * c[1] + 3 * mt * t * t * c[3] + t * t * t * c[5],
+          mt * mt * mt * cur[1] + 3 * mt * mt * t * c[2] + 3 * mt * t * t * c[4] + t * t * t * c[6],
+        ]);
+      }
+      cur = [c[5], c[6]];
+    }
+  }
+  for (const h of shapeArrowHeads(s)) h.forEach(push);
+  return out;
+}
+
+/** Whether (x, y) (page space) is inside a filled shape's area. */
+function shapeContains(stroke, x, y) {
+  if (!stroke || !stroke.shape || !Array.isArray(stroke.shape.fill)) return false;
+  const s = shapeOf(stroke);
+  if (s.kind !== 'rect' && s.kind !== 'ellipse' && s.kind !== 'polygon') return false;
+  if (typeof document === 'undefined') return false;
+  const ctx = shapeContains._ctx || (shapeContains._ctx = document.createElement('canvas').getContext('2d'));
+  return ctx.isPointInPath(shapePath2D(s), x, y);
+}
+
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour, isAxisAlignedRect, smoothStrokePoints, recognizeFreehandShape, shapeLinePoints, buildStrokeRecord, shapeOf, shapeOutline, shapeArrowHeads, shapeBbox, drawShape, hitPoints, shapeContains };
 

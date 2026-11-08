@@ -454,6 +454,46 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
   emit('documentLoaded', { pageInfos, strokesCount: strokes.length });
 }
 
+function shapeStyleOf(s) {
+  return { rgb: [...(s.rgb || [0, 0, 0])], base_width: s.base_width, shape: JSON.parse(JSON.stringify(s.shape)) };
+}
+
+function applyShapeStyle(s, style) {
+  s.rgb = [...style.rgb];
+  s.base_width = style.base_width;
+  s.shape = JSON.parse(JSON.stringify(style.shape));
+  for (const p of s.points || []) {
+    p.w = s.base_width;
+    p.sk = s.shape.kind;
+  }
+  if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+    s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
+  }
+  s._cachedPath2D = null;
+}
+
+/**
+ * Restyle shapes (Plan 095) as one undo step. `change(style)` edits a copy of
+ * each shape's { rgb, base_width, shape } in place; shapes it leaves equal are
+ * not touched.
+ */
+export function restyleShapes(shapes, change, { recordHistory = true } = {}) {
+  const items = [];
+  for (const s of shapes) {
+    if (!s || !s.shape || s.deleted) continue;
+    const before = shapeStyleOf(s);
+    const after = shapeStyleOf(s);
+    change(after, s);
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    applyShapeStyle(s, after);
+    items.push({ id: s.id, stroke: s, before, after });
+  }
+  if (!items.length) return 0;
+  if (recordHistory) history.pushTransaction({ type: 'restyle_shapes', items });
+  notifyMutation('restyle_shapes', { strokes: items.map(i => i.stroke) });
+  return items.length;
+}
+
 function snapshotAnnotations() {
   return {
     strokes: (state.strokes || []).slice(),
@@ -878,6 +918,10 @@ export function performUndo() {
     applyAnnotations(tx.before);
     history.pushRedo(tx);
     notifyMutation('undo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'restyle_shapes') {
+    for (const it of tx.items) applyShapeStyle(it.stroke, it.before);
+    history.pushRedo(tx);
+    notifyMutation('undo_restyle_shapes', { strokes: tx.items.map(i => i.stroke) });
   } else if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = true;
     rebuildStrokesBySheet();
@@ -1016,6 +1060,10 @@ export function performRedo() {
     applyAnnotations(tx.after);
     history.pushUndoRaw(tx);
     notifyMutation('redo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'restyle_shapes') {
+    for (const it of tx.items) applyShapeStyle(it.stroke, it.after);
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_restyle_shapes', { strokes: tx.items.map(i => i.stroke) });
   } else if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = false;
     rebuildStrokesBySheet();

@@ -144,6 +144,7 @@ fn main() {
             commands::session::check_external_file_change,
             commands::save::save_pdf,
             commands::merge::find_conflict_siblings,
+            commands::ink::journal_shape_mutation,
             commands::merge::preview_merge,
             commands::merge::apply_merge,
             commands::merge::trash_conflict_copy,
