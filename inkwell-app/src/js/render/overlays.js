@@ -458,3 +458,38 @@ export function drawSearchHighlights(ctx, state, viewport, dpr, panes, clipPaneF
   }
 }
 
+
+/**
+ * After a merge (Plan 092), briefly highlight the ink that came from the
+ * other copy so the user can see what arrived.
+ */
+export function drawMergeHighlights(ctx, state, viewport, dpr, panes, clipPaneFn) {
+  const hl = state && state.mergeHighlight;
+  if (!ctx || !hl || !viewport || Date.now() > hl.until) return;
+  const paneList = panes || ['left'];
+  for (const pane of paneList) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    if (typeof clipPaneFn === 'function') clipPaneFn(ctx, pane);
+    ctx.fillStyle = 'rgba(20, 184, 166, 0.18)';
+    ctx.strokeStyle = 'rgba(13, 148, 136, 0.75)';
+    ctx.lineWidth = 1.5;
+    for (const s of state.strokes || []) {
+      if (s.deleted || !hl.ids.has(String(s.id)) || !s.points || !s.points.length) continue;
+      const pl = viewport.getPageLayout(s.sheet || 0);
+      if (!pl) continue;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of s.points) {
+        x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+        x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+      }
+      const pad = (s.base_width || 2) + 4;
+      const [sx0, sy0] = viewport.worldToScreen(pl.x + x0 - pad, pl.y + y0 - pad, pane);
+      const [sx1, sy1] = viewport.worldToScreen(pl.x + x1 + pad, pl.y + y1 + pad, pane);
+      ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+      ctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+    }
+    ctx.restore();
+  }
+}

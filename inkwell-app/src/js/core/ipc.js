@@ -126,6 +126,28 @@ export async function savePdf(pathStr, strokes, images, texts, { defaultName = n
   return await invokeTauri('save_pdf', { outPathStr: pathStr, ...payload });
 }
 
+/** Conflict copies of the open file left by sync clients (Plan 092), newest first. */
+export async function findConflictSiblings() {
+  return await invokeTauri('find_conflict_siblings', {});
+}
+
+/** What merging `otherPath` (null = the open file as it is on disk) would do. */
+export async function previewMerge(otherPath) {
+  const payload = buildSavePayload(state.strokes, state.images, state.textObjects);
+  return await invokeTauri('preview_merge', { otherPath: otherPath || null, ...payload });
+}
+
+/** Merge it into the session; `takeOurs`/`takeTheirs` flip notes edited on both sides. */
+export async function applyMerge(otherPath, { takeOurs = [], takeTheirs = [] } = {}) {
+  const payload = buildSavePayload(state.strokes, state.images, state.textObjects);
+  return await invokeTauri('apply_merge', { otherPath: otherPath || null, takeOurs, takeTheirs, ...payload });
+}
+
+/** Move a merged conflict copy to the OS trash. */
+export async function trashConflictCopy(path) {
+  return await invokeTauri('trash_conflict_copy', { path });
+}
+
 /** Ask the backend's FlushPolicy whether to autosave now; returns a reason or null. */
 export async function autosaveTick(dirty, sinceInputS, sinceFlushS, focusLost) {
   return await invokeTauri('autosave_tick', { dirty, sinceInputS, sinceFlushS, focusLost });

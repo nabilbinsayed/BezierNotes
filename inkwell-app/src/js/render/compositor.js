@@ -639,6 +639,7 @@ export function redrawAll() {
   // 4. Persistent text selection and search highlights
   overlays.drawPersistentTextSelectionHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
   overlays.drawSearchHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
+  overlays.drawMergeHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
 
   // Draw selection / lasso overlay on wet layer
   overlays.drawSelectionOverlay(_wctx, state, _viewport, state.dpr, state.activePane || state.drawingPane || 'left');

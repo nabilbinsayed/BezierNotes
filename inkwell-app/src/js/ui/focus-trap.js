@@ -22,6 +22,7 @@ export function initModalFocusTrap() {
     'insertPageModal',
     'signatureModal',
     'confirmCloseModal',
+    'mergeModal',
   ];
 
   modalIds.forEach(id => {

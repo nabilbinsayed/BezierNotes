@@ -20,7 +20,8 @@ import * as presentation from '../ui/presentation.js';
 import { createNewWhiteboard, friendlyError, handlePdfLoadResult, hideOpenProgress, openFileTrigger, showOpenProgress } from '../app/document-loading.js';
 import { getViewport } from '../app/viewport-ref.js';
 import { exportWithSelectedOptions, refreshExportModal, syncExportCustomInputVisibility } from '../ui/export-modal.js';
-import { checkForExternalChanges, keepMineExternal, reloadExternalPdf, saveCopyExternal } from '../ui/external-change.js';
+import { checkForExternalChanges, keepMineExternal, mergeExternal, reloadExternalPdf, saveCopyExternal } from '../ui/external-change.js';
+import { bindMergeUi } from '../ui/merge.js';
 import { initModalFocusTrap } from '../ui/focus-trap.js';
 import { closeInsertPageModal, openInsertPageModal } from '../ui/insert-page-modal.js';
 import { initLassoSelectionPopover } from '../ui/popovers.js';
@@ -388,6 +389,12 @@ export function bindAllUIEvents() {
     reloadExternalBtn.addEventListener('click', () => { reloadExternalPdf(); });
   }
   // No plain dismiss: autosave stays paused until one of the three choices.
+  const mergeExternalBtn = $('btnMergeExternal');
+  if (mergeExternalBtn) {
+    mergeExternalBtn.addEventListener('click', () => { mergeExternal(); });
+  }
+  bindMergeUi();
+
   const keepMineBtn = $('btnKeepMineExternal');
   if (keepMineBtn) {
     keepMineBtn.addEventListener('click', () => { keepMineExternal(); });

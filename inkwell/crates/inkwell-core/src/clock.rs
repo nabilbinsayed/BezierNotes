@@ -259,13 +259,13 @@ pub fn keys_between(lo: Option<&str>, hi: Option<&str>, n: usize) -> Vec<String>
 /// Indices of a longest strictly increasing subsequence of `keys`
 /// (`None` entries never take part). Keeping these and re-keying the rest
 /// turns a reorder into one changed key instead of many.
-pub fn longest_increasing(keys: &[Option<&str>]) -> Vec<usize> {
+pub fn longest_increasing<T: Ord>(keys: &[Option<T>]) -> Vec<usize> {
     // patience sorting with predecessor links, O(n log n)
     let mut tails: Vec<usize> = Vec::new();
     let mut prev: Vec<Option<usize>> = vec![None; keys.len()];
     for (i, k) in keys.iter().enumerate() {
         let Some(k) = k else { continue };
-        let pos = tails.partition_point(|&t| keys[t].expect("tails hold keyed slots") < *k);
+        let pos = tails.partition_point(|&t| keys[t].as_ref().expect("tails hold keyed slots") < k);
         if pos > 0 {
             prev[i] = Some(tails[pos - 1]);
         }

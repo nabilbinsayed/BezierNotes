@@ -9,6 +9,7 @@ import * as annotations from '../workspace/annotations.js';
 import * as toast from '../ui/toast.js';
 import * as commandsModule from '../core/commands.js';
 import { friendlyError, handlePdfLoadResult, hideOpenProgress, showOpenProgress } from '../app/document-loading.js';
+import { openMergePreview } from './merge.js';
 
 export function showExternalChangeBanner() {
   const banner = $('externalChangeBanner');
@@ -29,6 +30,18 @@ export function showExternalChangeBanner() {
 function resolveExternalChange() {
   state.externalChangePending = false;
   hideExternalChangeBanner();
+}
+
+/**
+ * "Merge" (Plan 092): fold the changed file into this session instead of
+ * choosing one version. Falls back to the other choices when the file on disk
+ * can't be merged (e.g. it is a different document now).
+ */
+export function mergeExternal() {
+  return openMergePreview(null, {
+    onApplied: () => resolveExternalChange(),
+    onMerged: () => toast.showToast('Merged the changed file into your version and saved.', 'success'),
+  });
 }
 
 /**

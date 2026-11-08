@@ -454,6 +454,50 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
   emit('documentLoaded', { pageInfos, strokesCount: strokes.length });
 }
 
+function snapshotAnnotations() {
+  return {
+    strokes: (state.strokes || []).slice(),
+    images: (state.images || []).slice(),
+    textObjects: (state.textObjects || []).slice(),
+    bookmarks: (state.bookmarks || []).slice(),
+  };
+}
+
+function applyAnnotations({ strokes = [], images = [], textObjects = [], bookmarks = [] }) {
+  state.strokes = strokes;
+  state.images = images.map(img => {
+    const url = img.dataUrl || img.data_url || '';
+    img.dataUrl = url;
+    img.data_url = url;
+    if (url) ensureImageElement(img);
+    return img;
+  });
+  state.textObjects = textObjects.map(t => {
+    const fs = t.fontSize || t.font_size || 16;
+    t.fontSize = fs;
+    t.font_size = fs;
+    return t;
+  });
+  state.bookmarks = bookmarks;
+  state.selectedStrokes = [];
+  state.selectedImages = [];
+  state.selectedTextObjects = [];
+  rebuildStrokesBySheet();
+}
+
+/**
+ * Replace every annotation at once, as one undo step: how a merge (Plan 092)
+ * lands in the session. Pages are unchanged.
+ */
+export function replaceAnnotations(next, { recordHistory = true, label = '' } = {}) {
+  const before = snapshotAnnotations();
+  applyAnnotations(next);
+  if (recordHistory) {
+    history.pushTransaction({ type: 'replace_annotations', label, before, after: snapshotAnnotations() });
+  }
+  notifyMutation('replace_annotations', { label });
+}
+
 export function insertPageAtIndex(targetIndex, pageInfo, { recordHistory = true } = {}) {
   if (!state.pageInfos) state.pageInfos = [];
   const insertIdx = Math.max(0, Math.min(state.pageInfos.length, targetIndex));
@@ -830,7 +874,11 @@ export function performUndo() {
   const tx = history.popUndo();
   if (!tx) return false;
 
-  if (tx.type === 'add_stroke' && tx.stroke) {
+  if (tx.type === 'replace_annotations') {
+    applyAnnotations(tx.before);
+    history.pushRedo(tx);
+    notifyMutation('undo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = true;
     rebuildStrokesBySheet();
     history.pushRedo(tx);
@@ -964,7 +1012,11 @@ export function performRedo() {
   const tx = history.popRedo();
   if (!tx) return false;
 
-  if (tx.type === 'add_stroke' && tx.stroke) {
+  if (tx.type === 'replace_annotations') {
+    applyAnnotations(tx.after);
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_replace_annotations', { label: tx.label });
+  } else if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = false;
     rebuildStrokesBySheet();
     history.pushUndoRaw(tx);

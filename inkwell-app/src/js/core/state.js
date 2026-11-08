@@ -163,5 +163,7 @@ export const state = {
   // The open file changed on disk and the user has not yet chosen Reload /
   // Keep mine / Save a copy: no autosave may overwrite it meanwhile.
   externalChangePending: false,
+  // Incoming ink highlighted briefly after a merge (Plan 092): { ids: Set, until }.
+  mergeHighlight: null,
   lastSavedAt: null,
 };

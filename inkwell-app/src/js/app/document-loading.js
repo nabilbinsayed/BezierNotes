@@ -13,6 +13,7 @@ import * as toast from '../ui/toast.js';
 import * as toolbar from '../ui/toolbar.js';
 import * as drawers from '../ui/drawers.js';
 import { getViewport } from '../app/viewport-ref.js';
+import { checkForConflictCopies } from '../ui/merge.js';
 
 export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations = false } = {}) {
   if (!res) { hideOpenProgress(); return; }
@@ -88,6 +89,9 @@ export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations =
       { actions: [{ label: 'Restore them', onClick: () => restoreShelvedChanges(title, pathStr) }] },
     );
   }
+
+  // Conflict copies left by a sync client (Plan 092): offered, never merged silently.
+  if (pathStr) setTimeout(() => { checkForConflictCopies(); }, 600);
 
   const warm = () => {
     const t0 = performance.now();

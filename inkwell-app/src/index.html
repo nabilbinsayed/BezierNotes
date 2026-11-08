@@ -469,9 +469,22 @@
           <span id="externalChangeDetail">Another app or cloud sync updated the file. Your unsaved ink is safe.</span>
         </span>
         <span class="external-change-actions">
+          <button id="btnMergeExternal" type="button" class="btn-primary external-change-action" title="Combine the changed file with your version: nothing from either is lost">Merge</button>
           <button id="btnReloadExternalPdf" type="button" class="btn-secondary external-change-action" title="Use the version on disk; your unsaved annotations are kept on top">Reload</button>
           <button id="btnKeepMineExternal" type="button" class="btn-secondary external-change-action" title="Keep working on your version; your next save replaces the changed file">Keep mine</button>
           <button id="btnSaveCopyExternal" type="button" class="btn-secondary external-change-action" title="Save your version as a separate file and leave the changed one alone">Save a copy</button>
+        </span>
+      </div>
+
+      <div id="conflictCopyBanner" class="external-change-banner conflict-copy-banner hidden" role="status" aria-live="polite">
+        <span class="external-change-icon" aria-hidden="true">🔀</span>
+        <span class="external-change-text">
+          <strong id="conflictCopyTitle">Another version of this notebook was found</strong>
+          <span id="conflictCopyDetail"></span>
+        </span>
+        <span class="external-change-actions">
+          <button id="btnMergeConflictCopy" type="button" class="btn-primary external-change-action" title="Bring the other copy's work into this notebook">Merge</button>
+          <button id="btnDismissConflictCopy" type="button" class="btn-secondary external-change-action" title="Leave the other copy alone for now">Not now</button>
         </span>
       </div>
 
@@ -1215,6 +1228,26 @@
         <button type="submit" id="btnConfirmInsertPage" class="btn-modal-primary">Insert Page</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Merge Preview Modal (Plan 092) -->
+<div id="mergeModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="mergeTitle">
+  <div class="modal-card modal-card-wide">
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <h3 id="mergeTitle" class="modal-title">Merge <span id="mergeOtherName"></span></h3>
+        <p class="modal-subtitle">Work from both copies is kept. Undo reverses the whole merge.</p>
+      </div>
+      <button id="btnCloseMergeModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
+    </div>
+    <ul id="mergeSummary" class="merge-summary"></ul>
+    <div id="mergeConflicts" class="merge-conflicts hidden"></div>
+    <p id="mergePages" class="merge-pages"></p>
+    <div class="modal-actions-row">
+      <button type="button" id="btnCancelMerge" class="btn-modal-secondary">Cancel</button>
+      <button type="button" id="btnApplyMerge" class="btn-modal-primary">Merge and save</button>
+    </div>
   </div>
 </div>
 

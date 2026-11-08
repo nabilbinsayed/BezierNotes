@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 65d96b4e144c449aaefa02f253c380078a6262fa8faf8878ee47bcb746aa00d7 # shrinks to oa = [MoveStroke(0, -2)], ob = []
+cc dd9f9046107d7ef5056fcdcd4269f047975e781a06368097ffa142f0a629f2b4 # shrinks to oa = [], ob = [DeletePage(3)]
+cc f89372fc552a2abfda8d6124719bfdb05729297ad901b98d025fc7b24df02808 # shrinks to oa = [DeletePage(3)], ob = [AddStroke(3, 0)]
+cc c721357277eb2ef0ba208a164799632926823eb1e179174d91f83598b9d45c22 # shrinks to oa = [DeletePage(3), InsertPage(3)], ob = [AddStroke(0, 0)], oc = []
+cc cbf9c4bbd1cdd3a6ac01d9f1660640af87ca1499befd235c87085f40567979e3 # shrinks to oa = [DeletePage(0), InsertPage(3), InsertPage(0)], ob = [AddStroke(3, 0)]

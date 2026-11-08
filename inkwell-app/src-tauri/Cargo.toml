@@ -17,6 +17,7 @@ log = "0.4"
 pdfium-render = "0.9"
 inkwell-core = { path = "../../inkwell/crates/inkwell-core" }
 inkwell-pdf = { path = "../../inkwell/crates/inkwell-pdf" }
+trash = "5"
 
 [profile.dev]
 opt-level = 1

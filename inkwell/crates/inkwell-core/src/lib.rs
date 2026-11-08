@@ -49,6 +49,7 @@ pub mod clock;
 pub mod codec;
 pub mod doc;
 pub mod ink;
+pub mod merge;
 pub mod pdf;
 pub mod pdfobj;
 pub mod text_shape;

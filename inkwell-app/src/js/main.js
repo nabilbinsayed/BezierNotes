@@ -188,6 +188,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     const type = evt.type;
     const data = evt.payload || {};
 
+    if (type && type.endsWith('replace_annotations')) {
+      // A merge or its undo swapped every annotation (Plan 092).
+      drawers.renderBookmarks();
+      compositor.scheduleRedrawAll();
+    }
+
     if (type === 'undo_add_stroke') {
       if (data.stroke && data.stroke.id) {
         ipc.deleteStroke(data.stroke.id).catch(err => {

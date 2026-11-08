@@ -5900,3 +5900,87 @@ body.presentation-mode .stage {
 }
 .annotation-card { content-visibility: auto; contain-intrinsic-size: auto 48px; }
 .thumb-card { content-visibility: auto; contain-intrinsic-size: auto 196px; }
+
+/* ---- Conflict copies and merge (Plan 092) ---- */
+.conflict-copy-banner {
+  border-color: rgba(45, 212, 191, 0.5);
+}
+
+.conflict-copy-banner .external-change-text strong {
+  color: #99f6e4;
+}
+
+#conflictCopyDetail {
+  color: var(--text-muted, #94a3b8);
+  font-size: 12px;
+}
+
+.merge-summary {
+  margin: 4px 0 12px;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-main, #e2e8f0);
+}
+
+.merge-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.merge-conflicts.hidden {
+  display: none;
+}
+
+.merge-conflict {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  border-radius: 12px;
+  background: rgba(250, 204, 21, 0.06);
+}
+
+.merge-conflict legend {
+  padding: 0 6px;
+  font-size: 12px;
+  color: #fde68a;
+}
+
+.merge-choice {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.merge-choice:focus-within {
+  outline: 2px solid var(--accent, #38bdf8);
+  outline-offset: 1px;
+}
+
+.merge-choice input {
+  width: 20px;
+  height: 20px;
+}
+
+.merge-choice-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-muted, #cbd5e1);
+}
+
+.merge-conflict-other,
+.merge-pages {
+  font-size: 12px;
+  color: var(--text-muted, #94a3b8);
+}

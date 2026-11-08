@@ -50,3 +50,5 @@ include/
 licenses/
 args.gn
 PDFiumConfig.cmake
+# Rust binary sources (the rule above is for build output)
+!inkwell/crates/*/src/bin/

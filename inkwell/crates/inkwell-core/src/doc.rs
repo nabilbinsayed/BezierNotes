@@ -478,9 +478,11 @@ fn text_hash(page: u128, t: &TextObject) -> u64 {
     h.finish()
 }
 
-fn bookmark_hash(b: &Bookmark) -> u64 {
+fn bookmark_hash(page: u128, b: &Bookmark) -> u64 {
+    // By page identity, like every other object: a bookmark whose page index
+    // shifts because an earlier page was deleted now points at another page.
     let mut h = Fnv::new();
-    h.word(b.page as u64).bytes(b.label.as_bytes()).word(b.created_at);
+    h.word(page as u64).word((page >> 64) as u64).bytes(b.label.as_bytes()).word(b.created_at);
     h.finish()
 }
 
@@ -488,7 +490,7 @@ impl Document {
     /// Every object with its content hash. Objects are hashed with the id of
     /// the page holding them, so moving one to another page is a change but
     /// reordering pages is not.
-    fn object_hashes(&self) -> HashMap<ObjectId, u64> {
+    pub(crate) fn object_hashes(&self) -> HashMap<ObjectId, u64> {
         let mut out = HashMap::with_capacity(self.stroke_count() + self.sheets.len() + self.bookmarks.len());
         for sh in &self.sheets {
             let p = sh.page_id;
@@ -507,7 +509,8 @@ impl Document {
             }
         }
         for b in &self.bookmarks {
-            out.insert(ObjectId::Bookmark(b.id.clone()), bookmark_hash(b));
+            let page = self.sheets.get(b.page).map_or(0, |s| s.page_id);
+            out.insert(ObjectId::Bookmark(b.id.clone()), bookmark_hash(page, b));
         }
         out
     }
@@ -524,7 +527,7 @@ impl Document {
 
     /// Raise `clock` to the largest value recorded anywhere in the document,
     /// so the next local tick is newer than everything already in it.
-    fn observe_all(&mut self) {
+    pub(crate) fn observe_all(&mut self) {
         let mut hi = self.clock;
         for c in self.clocks.values() {
             hi = hi.max(c.created.lamport).max(c.modified.lamport);
@@ -626,10 +629,12 @@ impl Document {
     /// every other page a key between its kept neighbours, so a reorder
     /// changes one key, not every key after it.
     fn assign_order_keys(&mut self) {
-        let keys: Vec<Option<&str>> = self
+        // Page order is (key, page id): a merge can leave two pages with one
+        // key (concurrent inserts at the same spot), and that is in order.
+        let keys: Vec<Option<(&str, u128)>> = self
             .sheets
             .iter()
-            .map(|s| Some(s.order_key.as_str()).filter(|k| clock::is_valid_key(k)))
+            .map(|s| Some((s.order_key.as_str(), s.page_id)).filter(|(k, _)| clock::is_valid_key(k)))
             .collect();
         let keep = clock::longest_increasing(&keys);
         if keep.len() == self.sheets.len() {
@@ -646,10 +651,12 @@ impl Document {
                 continue;
             }
             let start = i;
-            while i < self.sheets.len() && !kept[i] {
+            let lo = start.checked_sub(1).map(|j| self.sheets[j].order_key.clone());
+            // A fresh key must fall strictly between its neighbours' keys; if
+            // the next kept page shares the previous one's key, re-key it too.
+            while i < self.sheets.len() && (!kept[i] || lo.as_deref().is_some_and(|lo| self.sheets[i].order_key.as_str() <= lo)) {
                 i += 1;
             }
-            let lo = start.checked_sub(1).map(|j| self.sheets[j].order_key.clone());
             let hi = self.sheets.get(i).map(|s| s.order_key.clone());
             let fresh = clock::keys_between(lo.as_deref(), hi.as_deref(), i - start);
             for (sh, k) in self.sheets[start..i].iter_mut().zip(fresh) {

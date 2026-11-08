@@ -3126,6 +3126,130 @@ with sync_playwright() as pw:
           a["offerShown"] and a["restoreReopened"], f"res={a}")
 
     # -------------------------------------------------------------
+    # T31: Conflict copies and merge (Plan 092)
+    # -------------------------------------------------------------
+    print("\n=== T31 Conflict Copies & Merge ===", flush=True)
+    merge_res = pg.evaluate("""(async () => {
+      const merge = await import('./js/ui/merge.js');
+      const ext = await import('./js/ui/external-change.js');
+      const stub = window.__inkwell_stub;
+      const calls = { preview: [], apply: [], trash: [], save: [] };
+      const out = {};
+      const stroke = (id, x) => ({ id, kind: 'pen', rgb: [0, 0, 0], base_width: 2, sheet: 0, deleted: false,
+        points: [{ x, y: 100, p: 0.5, t: 0 }, { x: x + 40, y: 120, p: 0.5, t: 8 }] });
+      const note = (id, text) => ({ id, sheet: 0, x: 50, y: 300, text, font_size: 14, color: '#000000',
+        bold: false, italic: false, width: 120, height: 24 });
+      const preview = {
+        other_name: 'notes (1).pdf', added_strokes: 1, added_other: 0, removed: 1, changed: 0,
+        conflicts: [{ id: 'n1', kind: 'note', ours: 'my wording', theirs: 'their wording', winner: 'theirs' }],
+        pages_kept_by_ink: 0, pages_affected: [0],
+      };
+      stub.find_conflict_siblings = async () => [{ path: '/tmp/notes (1).pdf', name: 'notes (1).pdf',
+        source: 'Google Drive or Dropbox copy', modified_ms: Date.now() - 2 * 3600 * 1000 }];
+      stub.preview_merge = async (a) => { calls.preview.push(a); return preview; };
+      stub.apply_merge = async (a) => { calls.apply.push(a); return {
+        preview, strokes: [stroke('theirs1', 200)], images: [], texts: [note('n1', 'my wording')],
+        bookmarks: [{ id: 'bm1', page: 0, label: 'From tablet', created_at: 5 }], incoming_stroke_ids: ['theirs1'] }; };
+      stub.trash_conflict_copy = async (a) => { calls.trash.push(a); return null; };
+      stub.save_pdf = async (a) => { calls.save.push(a); return a.outPathStr; };
+
+      window.state.currentDocPath = '/tmp/notes.pdf';
+      window.state.externalChangePending = false;
+      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
+      window.documentOps.setDocument({ pageInfos: window.state.pageInfos, strokes: [stroke('mine1', 80)],
+        images: [], textObjects: [note('n1', 'my wording')], bookmarks: [] });
+
+      // 1. A conflict copy is found and offered, with two 44 px choices.
+      const found = await merge.checkForConflictCopies();
+      const banner = document.getElementById('conflictCopyBanner');
+      out.bannerShown = !!found && !banner.classList.contains('hidden');
+      out.bannerText = document.getElementById('conflictCopyDetail').textContent;
+      out.bannerButtons = ['btnMergeConflictCopy', 'btnDismissConflictCopy']
+        .map(id => document.getElementById(id).getBoundingClientRect().height >= 44);
+
+      // 2. Merge opens the preview: counts, and the note edited on both sides
+      //    with the newer version preselected.
+      document.getElementById('btnMergeConflictCopy').click();
+      await new Promise(r => setTimeout(r, 30));
+      const modal = document.getElementById('mergeModal');
+      out.modalOpen = !modal.classList.contains('hidden');
+      out.previewFor = calls.preview.length === 1 && calls.preview[0].otherPath === '/tmp/notes (1).pdf'
+        && Array.isArray(calls.preview[0].strokes) && calls.preview[0].strokes.length === 1;
+      out.summary = Array.from(document.querySelectorAll('#mergeSummary li')).map(li => li.textContent);
+      const radios = Array.from(document.querySelectorAll('input[name="merge-n1"]'));
+      out.preselected = radios.find(r => r.checked)?.value;
+      out.bothTexts = /my wording/.test(modal.textContent) && /their wording/.test(modal.textContent);
+      out.choiceTarget = radios.every(r => r.closest('label').getBoundingClientRect().height >= 44);
+
+      // 3. The user keeps their own wording; apply, save, highlight, offer Trash.
+      radios.find(r => r.value === 'ours').click();
+      document.getElementById('btnApplyMerge').click();
+      await new Promise(r => setTimeout(r, 60));
+      const a0 = calls.apply[0] || {};
+      out.choicesSent = JSON.stringify(a0.takeOurs) === '["n1"]' && (a0.takeTheirs || []).length === 0;
+      out.applied = window.state.strokes.map(s => s.id).join(',') === 'theirs1'
+        && window.state.bookmarks.length === 1 && window.state.bookmarks[0].createdAt === 5;
+      out.highlighted = !!window.state.mergeHighlight && window.state.mergeHighlight.ids.has('theirs1');
+      out.savedAfter = calls.save.length === 1;
+      out.modalClosed = modal.classList.contains('hidden');
+      const offer = Array.from(document.querySelectorAll('.toast')).find(t => /Move copy to Trash/.test(t.textContent));
+      const trashBtn = offer && offer.querySelector('.toast-action');
+      out.trashOffered = !!trashBtn && trashBtn.getBoundingClientRect().height >= 44;
+      if (trashBtn) trashBtn.click();
+      await new Promise(r => setTimeout(r, 30));
+      out.trashed = calls.trash.length === 1 && calls.trash[0].path === '/tmp/notes (1).pdf';
+
+      // 4. The whole merge is one undo step, and redo puts it back.
+      window.documentOps.performUndo();
+      out.undone = window.state.strokes.map(s => s.id).join(',') === 'mine1' && window.state.bookmarks.length === 0;
+      window.documentOps.performRedo();
+      out.redone = window.state.strokes.map(s => s.id).join(',') === 'theirs1';
+
+      // 5. The change-on-disk banner leads with Merge, and merging resolves it.
+      window.state.externalChangePending = true;
+      ext.showExternalChangeBanner();
+      const first = document.querySelector('#externalChangeBanner .external-change-actions button');
+      out.mergeFirst = first && first.id === 'btnMergeExternal' && first.getBoundingClientRect().height >= 44;
+      first.click();
+      await new Promise(r => setTimeout(r, 30));
+      out.externalPreviewOfDisk = calls.preview.length === 2 && calls.preview[1].otherPath === null;
+      document.getElementById('btnApplyMerge').click();
+      await new Promise(r => setTimeout(r, 60));
+      out.externalResolved = window.state.externalChangePending === false
+        && document.getElementById('externalChangeBanner').classList.contains('hidden');
+
+      // 6. A different document is refused with a message, and nothing opens.
+      stub.preview_merge = async () => { throw 'notes (2).pdf is a different document'; };
+      const toastsBefore = document.querySelectorAll('.toast-error').length;
+      out.refused = (await merge.openMergePreview('/tmp/notes (2).pdf')) === false
+        && modal.classList.contains('hidden')
+        && document.querySelectorAll('.toast-error').length > toastsBefore;
+
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    m = merge_res
+    check("a sync-client conflict copy is offered with its source and age, two 44 px choices",
+          m["bannerShown"] and "Google Drive" in m["bannerText"] and "2 hours ago" in m["bannerText"]
+          and all(m["bannerButtons"]), f"res={m}")
+    check("Merge previews the other copy with the session's current annotations",
+          m["modalOpen"] and m["previewFor"], f"res={m}")
+    check("preview counts incoming and deleted items",
+          any(s.startswith("+1 stroke") for s in m["summary"]) and any(s.startswith("\u22121 item") for s in m["summary"]),
+          f"summary={m['summary']}")
+    check("a note edited on both sides shows both texts, newer preselected, 44 px choices",
+          m["preselected"] == "theirs" and m["bothTexts"] and m["choiceTarget"], f"res={m}")
+    check("switching a conflict is sent with the merge, which lands, highlights and saves",
+          m["choicesSent"] and m["applied"] and m["highlighted"] and m["savedAfter"] and m["modalClosed"], f"res={m}")
+    check("after the merge the copy can be moved to the Trash (44 px action)",
+          m["trashOffered"] and m["trashed"], f"res={m}")
+    check("the merge is one undo step and redo restores it", m["undone"] and m["redone"], f"res={m}")
+    check("change-on-disk banner leads with Merge, which merges the disk version and resolves",
+          m["mergeFirst"] and m["externalPreviewOfDisk"] and m["externalResolved"], f"res={m}")
+    check("merging a different document is refused with a message", m["refused"], f"res={m}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)
