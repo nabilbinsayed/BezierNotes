@@ -6,9 +6,15 @@ use std::path::PathBuf;
 use inkwell_pdf::Pdfium;
 
 pub enum WalOp {
-    Append(WalEntry),
+    /// An entry plus the frontend journal sequence number it was sent with.
+    Append(WalEntry, u64),
     Truncate(Option<std::sync::mpsc::SyncSender<()>>),
     Discard(Option<std::sync::mpsc::SyncSender<()>>),
+    /// After a save: drop the records its snapshot covered (seq <= n).
+    TruncateThrough(u64, Option<std::sync::mpsc::SyncSender<()>>),
+    /// "Don't Save" on quit: close the journal and set it aside (renamed, not
+    /// deleted) so the next open of the document can offer to restore it.
+    Shelve(Option<std::sync::mpsc::SyncSender<()>>),
     Close,
 }
 
@@ -111,6 +117,16 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, DocumentSession>>,
     pub active_session_id: Mutex<Option<String>>,
     pub is_dirty: std::sync::atomic::AtomicBool,
+    /// Incremented when a save starts. A save whose number is no longer the
+    /// latest skips its disk write, so an older snapshot can never land on
+    /// disk after a newer one.
+    pub save_generation: std::sync::atomic::AtomicU64,
+    /// Held from a save's snapshot to its publish, and by page edits, so
+    /// the two never interleave. Inking does not take it.
+    pub save_lock: Mutex<()>,
+    /// Highest frontend journal sequence number seen. A save leaves the
+    /// document dirty when this has moved past its snapshot.
+    pub journal_seq_hi: std::sync::atomic::AtomicU64,
 }
 
 impl Default for AppState {
@@ -130,6 +146,9 @@ impl Default for AppState {
             sessions: Mutex::new(HashMap::new()),
             active_session_id: Mutex::new(None),
             is_dirty: std::sync::atomic::AtomicBool::new(false),
+            save_generation: std::sync::atomic::AtomicU64::new(0),
+            save_lock: Mutex::new(()),
+            journal_seq_hi: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }

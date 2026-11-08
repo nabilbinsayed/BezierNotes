@@ -86,28 +86,32 @@ fn main() {
                 let is_dirty = app_state.is_dirty.load(std::sync::atomic::Ordering::Relaxed);
                 if is_dirty {
                     use tauri::Emitter;
-                    use tauri_plugin_dialog::DialogExt;
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
                     api.prevent_close();
                     let window_clone = window.clone();
+                    // Native, so quitting still works if the page's JS is broken.
+                    // Cancel / Esc / closing the dialog = keep working (Plan 090).
                     window.app_handle().dialog()
-                        .message("Do you want to save your document changes before quitting? Click OK to save or Cancel to discard and exit.")
+                        .message("Save your changes before quitting?\n\nIf you don't save, your changes are set aside and offered back the next time you open this file.")
                         .title("Save Changes?")
                         .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
-                        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancel)
-                        .show(move |save_confirmed| {
-                            if save_confirmed {
+                        .buttons(MessageDialogButtons::YesNoCancelCustom(
+                            "Save".into(),
+                            "Don't Save".into(),
+                            "Cancel".into(),
+                        ))
+                        .show_with_result(move |choice| match choice {
+                            MessageDialogResult::Yes => {
                                 let _ = window_clone.emit("app-save-and-close", ());
-                            } else {
-                                let state = window_clone.state::<AppState>();
-                                let _ = state.wal.lock().map(|mut g| {
-                                    if let Some(tx) = g.take() {
-                                        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-                                        let _ = tx.send(crate::state::WalOp::Discard(Some(ack_tx)));
-                                        let _ = ack_rx.recv_timeout(std::time::Duration::from_millis(500));
-                                    }
-                                });
-                                window_clone.app_handle().exit(0);
                             }
+                            MessageDialogResult::Custom(label) if label == "Save" => {
+                                let _ = window_clone.emit("app-save-and-close", ());
+                            }
+                            MessageDialogResult::No => quit_without_saving(&window_clone),
+                            MessageDialogResult::Custom(label) if label == "Don't Save" => {
+                                quit_without_saving(&window_clone)
+                            }
+                            _ => {}
                         });
                 } else {
                     let _ = app_state.wal.lock().map(|mut g| {
@@ -158,8 +162,25 @@ fn main() {
             commands::window::toggle_maximize_window,
             commands::window::close_window,
             commands::window::check_pdfium_status,
+            commands::window::autosave_tick,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");
 }
 
+
+/// "Don't Save": keep the unsaved work recoverable instead of deleting it.
+/// The journal is set aside (closed and renamed) and the next open of the
+/// file offers to restore it.
+fn quit_without_saving(window: &tauri::Window) {
+    use tauri::Manager;
+    let state = window.state::<AppState>();
+    if let Ok(mut g) = state.wal.lock() {
+        if let Some(tx) = g.take() {
+            let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+            let _ = tx.send(crate::state::WalOp::Shelve(Some(ack_tx)));
+            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(2));
+        }
+    }
+    window.app_handle().exit(0);
+}

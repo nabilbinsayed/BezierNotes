@@ -77,6 +77,18 @@ export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations =
     toast.showToast(`Restored ${totalRecovered} items from crash recovery log`, 'info');
   }
 
+  // Changes set aside by "Don't Save" on the last quit (Plan 090): offered,
+  // never applied silently. Restoring reopens the file with them replayed;
+  // edits made since opening are journalled too, so nothing is lost.
+  const shelved = res.shelved_journal_entries || 0;
+  if (shelved > 0 && pathStr) {
+    toast.showToast(
+      `You chose not to save ${shelved} change${shelved === 1 ? '' : 's'} when you last closed this file.`,
+      'info',
+      { actions: [{ label: 'Restore them', onClick: () => restoreShelvedChanges(title, pathStr) }] },
+    );
+  }
+
   const warm = () => {
     const t0 = performance.now();
     for (const s of state.strokes || []) {
@@ -164,4 +176,21 @@ export async function createNewWhiteboard() {
     loaded_texts: [],
     outline: [],
   });
+}
+
+/** Reopen `pathStr` with the changes "Don't Save" set aside folded back in. */
+export async function restoreShelvedChanges(title, pathStr) {
+  showOpenProgress('Restoring set-aside changes…');
+  try {
+    const res = await ipc.openPdf(pathStr, { restoreShelved: true });
+    if (res) {
+      handlePdfLoadResult(title, pathStr, res);
+      toast.showToast('Restored the changes you had set aside', 'success');
+    }
+  } catch (err) {
+    const msg = friendlyError(err);
+    if (msg) toast.showToast('Could not restore: ' + msg, 'error');
+  } finally {
+    hideOpenProgress();
+  }
 }

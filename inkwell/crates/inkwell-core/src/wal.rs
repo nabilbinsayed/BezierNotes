@@ -95,6 +95,34 @@ pub struct Wal {
     path: PathBuf,
     file: File,
     records: u64,
+    /// The frontend's journal sequence number for each intact record in the
+    /// file, in order. Records already in the file when it was opened (crash
+    /// leftovers, replayed into the document at open) get 0, i.e. "covered by
+    /// any save". See `truncate_through`.
+    seqs: Vec<u64>,
+}
+
+/// Byte spans of the intact records in a journal buffer, in order. A torn or
+/// corrupt record ends the scan, exactly like `replay`.
+fn record_spans(buf: &[u8]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 5 <= buf.len() {
+        let len = u32::from_le_bytes([buf[i + 1], buf[i + 2], buf[i + 3], buf[i + 4]]) as usize;
+        let ps = i + 5;
+        let Some(pe) = ps.checked_add(len) else { break };
+        let Some(ce) = pe.checked_add(4) else { break };
+        if ce > buf.len() {
+            break;
+        }
+        let want = u32::from_le_bytes([buf[pe], buf[pe + 1], buf[pe + 2], buf[pe + 3]]);
+        if checksum(&buf[ps..pe]) != want {
+            break;
+        }
+        out.push((i, ce));
+        i = ce;
+    }
+    out
 }
 
 fn checksum(b: &[u8]) -> u32 {
@@ -114,8 +142,13 @@ impl Wal {
     /// the document path is the right home, so the Drive folder stays clean.
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
+        let existing = match std::fs::read(&path) {
+            Ok(buf) => record_spans(&buf).len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(e),
+        };
         let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
-        Ok(Self { path, file, records: 0 })
+        Ok(Self { path, file, records: existing as u64, seqs: vec![0; existing] })
     }
 
     pub fn path(&self) -> &Path {
@@ -127,6 +160,13 @@ impl Wal {
     }
 
     pub fn append(&mut self, entry: &WalEntry) -> std::io::Result<()> {
+        self.append_seq(entry, 0)
+    }
+
+    /// Append `entry`, remembering the frontend journal sequence number `seq`
+    /// it was sent with, so `truncate_through` can tell which records a save
+    /// already covers no matter in which order the IPC calls arrived.
+    pub fn append_seq(&mut self, entry: &WalEntry, seq: u64) -> std::io::Result<()> {
         let (kind, payload) = match entry {
             WalEntry::Added { sheet, stroke } => {
                 let mut p = Vec::new();
@@ -184,6 +224,7 @@ impl Wal {
         // Durability is the entire point of this file. Do not remove.
         self.file.sync_data()?;
         self.records += 1;
+        self.seqs.push(seq);
         Ok(())
     }
 
@@ -282,7 +323,49 @@ impl Wal {
         file.sync_all()?;
         self.file = OpenOptions::new().create(true).read(true).append(true).open(&self.path)?;
         self.records = 0;
+        self.seqs.clear();
         Ok(())
+    }
+
+    /// After a save whose snapshot reflected every edit up to journal
+    /// sequence `seq`: drop the records it covers (seq <= `seq`) and keep the
+    /// rest. Edits made while the save was running are therefore still
+    /// journalled, instead of being wiped by a blanket `truncate`. Kept
+    /// records are copied byte for byte. Returns how many were kept.
+    ///
+    /// If the file no longer matches what this handle wrote (another writer,
+    /// or a torn tail), nothing is dropped: keeping too much is harmless
+    /// because replay is idempotent; dropping too much loses ink.
+    pub fn truncate_through(&mut self, seq: u64) -> std::io::Result<usize> {
+        let buf = std::fs::read(&self.path)?;
+        let spans = record_spans(&buf);
+        if spans.len() != self.seqs.len() {
+            return Ok(spans.len());
+        }
+        let keep: Vec<usize> = (0..spans.len()).filter(|&i| self.seqs[i] > seq).collect();
+        if keep.is_empty() {
+            self.truncate()?;
+            return Ok(0);
+        }
+        if keep.len() == spans.len() {
+            return Ok(keep.len());
+        }
+        let mut out = Vec::new();
+        for &i in &keep {
+            out.extend_from_slice(&buf[spans[i].0..spans[i].1]);
+        }
+        let name = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let tmp = self.path.with_file_name(format!("{name}.rewrite"));
+        {
+            let mut f = File::create(&tmp)?;
+            f.write_all(&out)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, &self.path)?;
+        self.file = OpenOptions::new().create(true).read(true).append(true).open(&self.path)?;
+        self.seqs = keep.iter().map(|&i| self.seqs[i]).collect();
+        self.records = self.seqs.len() as u64;
+        Ok(keep.len())
     }
 }
 
@@ -351,6 +434,46 @@ impl FlushPolicy {
         }
         None
     }
+}
+
+/// Delete `.<name>.inkwell-tmp-<pid>-<n>` siblings of `target` that a killed
+/// `atomic_write` left behind (Plan 087's torture loop: about a third of
+/// kills mid-save leave one). They sit in the user's sync folder and would be
+/// uploaded. Our own process's temps are never touched, and a temp must be at
+/// least `min_age` old so a concurrent writer in another process is never
+/// raced. Returns how many were removed.
+pub fn sweep_orphan_temps(target: &Path, min_age: std::time::Duration) -> usize {
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else { return 0 };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    let prefix = format!(".{}.inkwell-tmp-", name.to_string_lossy());
+    let own = format!("{prefix}{}-", std::process::id());
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for e in entries.flatten() {
+        let fname = e.file_name();
+        let fname = fname.to_string_lossy();
+        let Some(rest) = fname.strip_prefix(&prefix) else { continue };
+        // Exactly `<pid>-<n>`: never match a user's file by accident.
+        let mut parts = rest.split('-');
+        let well_formed = matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some(a), Some(b), None) if !a.is_empty() && !b.is_empty()
+                && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit())
+        );
+        if !well_formed || fname.starts_with(&own) {
+            continue;
+        }
+        let old_enough = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= min_age);
+        if old_enough && std::fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Atomic replace: write to a sibling temp file, fsync, then rename over the

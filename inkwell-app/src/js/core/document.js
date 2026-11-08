@@ -20,6 +20,7 @@ export function setMutationListener(listener) {
 
 function notifyMutation(type, payload) {
   state.isDirty = true;
+  state.editSeq += 1;
   if (typeof _mutationListener === 'function') {
     try {
       _mutationListener(type, payload);

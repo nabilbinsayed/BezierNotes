@@ -7,6 +7,7 @@ import { state, $, on } from '../core/state.js';
 import * as ipc from '../core/ipc.js';
 import * as annotations from '../workspace/annotations.js';
 import * as toast from '../ui/toast.js';
+import * as commandsModule from '../core/commands.js';
 import { friendlyError, handlePdfLoadResult, hideOpenProgress, showOpenProgress } from '../app/document-loading.js';
 
 export function showExternalChangeBanner() {
@@ -18,10 +19,41 @@ export function showExternalChangeBanner() {
   if (title) title.textContent = name ? `${name} changed on disk` : 'This PDF changed on disk';
   if (detail) {
     detail.textContent = state.isDirty
-      ? 'Another app or cloud sync updated the file. Your unsaved annotations are safe — reload keeps them.'
-      : 'Another app or cloud sync updated the file. Reload to pick up the new base pages.';
+      ? 'Another app or cloud sync updated the file. Autosave is paused until you choose; your unsaved annotations are safe either way.'
+      : 'Another app or cloud sync updated the file. Autosave is paused until you choose.';
   }
   banner.classList.remove('hidden');
+}
+
+/** Close the banner because the user resolved the change. */
+function resolveExternalChange() {
+  state.externalChangePending = false;
+  hideExternalChangeBanner();
+}
+
+/**
+ * "Keep mine": carry on with this version. The backend already re-stamped the
+ * file when it reported the change, so the next save overwrites it without a
+ * second alarm.
+ */
+export function keepMineExternal() {
+  resolveExternalChange();
+  toast.showToast('Keeping your version. Your next save replaces the changed file.', 'info');
+}
+
+/**
+ * "Save a copy": write this version to a new file (Save As, prefilled) and
+ * continue there, leaving the changed file untouched.
+ */
+export async function saveCopyExternal() {
+  const path = state.currentDocPath || '';
+  const stem = (path.split(/[\\/]/).pop() || 'Document.pdf').replace(/\.pdf$/i, '');
+  const ok = await commandsModule.commands.execute('file.save', { saveAsCopyName: `${stem} (BezierNotes copy).pdf` });
+  if (ok) {
+    resolveExternalChange();
+    toast.showToast('Saved your version as a copy; the changed file was left as it is.', 'success');
+  }
+  return ok;
 }
 
 export function hideExternalChangeBanner() {
@@ -44,6 +76,7 @@ export async function checkForExternalChanges() {
   try {
     const changed = await ipc.checkExternalFileChange();
     if (changed && state.currentDocPath) {
+      state.externalChangePending = true;
       showExternalChangeBanner();
       return true;
     }
@@ -72,7 +105,7 @@ export async function reloadExternalPdf() {
     }
     const title = path.split(/[\\/]/).pop();
     handlePdfLoadResult(title, path, res, { preserveAnnotations: true });
-    hideExternalChangeBanner();
+    resolveExternalChange();
     toast.showToast('Reloaded the updated PDF — unsaved annotations kept', 'success');
     return true;
   } catch (err) {

@@ -3,6 +3,7 @@
 use super::*;
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn commit_stroke(
     sheet: usize,
     tool: String,
@@ -10,8 +11,10 @@ pub async fn commit_stroke(
     base_width: f64,
     samples: Vec<RawSampleInput>,
     client_id: Option<String>,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let seq = journal_seq(state.inner(), seq);
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
@@ -59,7 +62,7 @@ pub async fn commit_stroke(
 
     // Offload WAL append to background worker thread channel.
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Append(WalEntry::Added { sheet, stroke }));
+        let _ = tx.send(WalOp::Append(WalEntry::Added { sheet, stroke }, seq));
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -101,7 +104,9 @@ fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
 }
 
 #[tauri::command]
-pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn delete_stroke(stroke_id_str: String, seq: Option<u64>,
+    state: State<'_, AppState>) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
@@ -109,7 +114,7 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
     let removed = doc.remove_stroke(id);
     if removed {
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-            let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+            let _ = tx.send(WalOp::Append(WalEntry::Removed(id), seq));
         }
         state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -121,8 +126,10 @@ pub async fn journal_image_mutation(
     op: String,
     image: Option<FrontendImage>,
     image_id: Option<String>,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         if op == "add" || op == "upsert" {
             if let Some(ref img) = image {
@@ -134,11 +141,11 @@ pub async fn journal_image_mutation(
                     width: img.width,
                     height: img.height,
                     data_url: img.data_url.clone(),
-                }));
+                }, seq));
             }
         } else if op == "remove" || op == "delete" {
             if let Some(ref id) = image_id {
-                let _ = tx.send(WalOp::Append(WalEntry::ImageRemoved { id: id.clone() }));
+                let _ = tx.send(WalOp::Append(WalEntry::ImageRemoved { id: id.clone() }, seq));
             }
         }
     }
@@ -172,8 +179,10 @@ pub async fn journal_text_mutation(
     op: String,
     text: Option<FrontendText>,
     text_id: Option<String>,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         if op == "add" || op == "upsert" {
             if let Some(ref t) = text {
@@ -189,11 +198,11 @@ pub async fn journal_text_mutation(
                     italic: t.italic,
                     width: t.width,
                     height: t.height,
-                }));
+                }, seq));
             }
         } else if op == "remove" || op == "delete" {
             if let Some(ref id) = text_id {
-                let _ = tx.send(WalOp::Append(WalEntry::TextRemoved { id: id.clone() }));
+                let _ = tx.send(WalOp::Append(WalEntry::TextRemoved { id: id.clone() }, seq));
             }
         }
     }
@@ -343,15 +352,17 @@ pub async fn erase_strokes_near(
     px: f64,
     py: f64,
     radius: f64,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
+    let seq = journal_seq(state.inner(), seq);
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
     let removed = doc.erase_strokes_near(sheet, px, py, radius);
     if !removed.is_empty() {
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
             for &id in &removed {
-                let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+                let _ = tx.send(WalOp::Append(WalEntry::Removed(id), seq));
             }
         }
         state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -366,15 +377,17 @@ pub async fn erase_strokes_in_rect(
     y0: f64,
     x1: f64,
     y1: f64,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
+    let seq = journal_seq(state.inner(), seq);
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
     let removed = doc.erase_strokes_in_rect(sheet, x0, y0, x1, y1);
     if !removed.is_empty() {
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
             for &id in &removed {
-                let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+                let _ = tx.send(WalOp::Append(WalEntry::Removed(id), seq));
             }
         }
         state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);

@@ -2,6 +2,7 @@
 //!
 //!   save_loop <base.pdf> <target.pdf>   save forever, one more stroke each time
 //!   save_loop --check <target.pdf>      exit 0 if target opens with intact ink
+//!   save_loop --sweep <target.pdf>      remove orphaned temps (Plan 090), print count
 //!
 //! The saver uses the same path as the app (`PdfFile` + `wal::atomic_write`),
 //! so `kill -9` at a random moment must never leave an unopenable file.
@@ -17,6 +18,10 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [flag, target] if flag == "--check" => check(Path::new(target)),
+        [flag, target] if flag == "--sweep" => {
+            println!("{}", inkwell_core::wal::sweep_orphan_temps(Path::new(target), std::time::Duration::ZERO));
+            ExitCode::SUCCESS
+        }
         [base, target] => save_forever(Path::new(base), Path::new(target)),
         _ => {
             eprintln!("usage: save_loop <base.pdf> <target.pdf> | --check <target.pdf>");

@@ -1260,3 +1260,67 @@ fn clean_pdf_sidecar_lookup_short_circuits_without_parsing_the_trailer() {
         other => panic!("expected Absent for a clean PDF, got {}", status_name(&other)),
     }
 }
+
+#[test]
+fn sweep_removes_only_foreign_well_formed_temps() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("notes.pdf");
+    std::fs::write(&target, b"pdf").unwrap();
+    let foreign = dir.path().join(".notes.pdf.inkwell-tmp-999999-3");
+    let own = dir.path().join(format!(".notes.pdf.inkwell-tmp-{}-0", std::process::id()));
+    let lookalike = dir.path().join(".notes.pdf.inkwell-tmp-backup");
+    let other_doc = dir.path().join(".other.pdf.inkwell-tmp-999999-3");
+    for p in [&foreign, &own, &lookalike, &other_doc] {
+        std::fs::write(p, b"x").unwrap();
+    }
+    // Too young: nothing goes.
+    assert_eq!(wal::sweep_orphan_temps(&target, Duration::from_secs(3600)), 0);
+    assert_eq!(wal::sweep_orphan_temps(&target, Duration::ZERO), 1);
+    assert!(!foreign.exists());
+    assert!(own.exists() && lookalike.exists() && other_doc.exists() && target.exists());
+}
+
+#[test]
+fn truncate_through_keeps_edits_made_during_a_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("j.bin");
+    let mut w = Wal::open(&p).unwrap();
+    let s = |id: u128| synth(id, 400.0, 30, ToolKind::Pen);
+    w.append_seq(&WalEntry::Added { sheet: 0, stroke: s(1) }, 1).unwrap();
+    w.append_seq(&WalEntry::Added { sheet: 0, stroke: s(3) }, 3).unwrap(); // arrived early
+    w.append_seq(&WalEntry::Added { sheet: 0, stroke: s(2) }, 2).unwrap();
+    w.append_seq(&WalEntry::Removed(1), 4).unwrap();
+    // A save snapshotted at seq 2: records 1 and 2 are covered, 3 and 4 are not.
+    assert_eq!(w.truncate_through(2).unwrap(), 2);
+    let ids: Vec<String> = Wal::replay(&p)
+        .unwrap()
+        .iter()
+        .map(|e| match e {
+            WalEntry::Added { stroke, .. } => format!("add{}", stroke.id),
+            WalEntry::Removed(id) => format!("rm{id}"),
+            _ => "other".into(),
+        })
+        .collect();
+    assert_eq!(ids, vec!["add3", "rm1"]);
+    // Appending after a partial truncate still works and is still tracked.
+    w.append_seq(&WalEntry::Added { sheet: 0, stroke: s(5) }, 5).unwrap();
+    assert_eq!(w.truncate_through(5).unwrap(), 0);
+    assert!(Wal::replay(&p).unwrap().is_empty());
+}
+
+#[test]
+fn reopened_journal_counts_leftover_records_as_covered() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("j.bin");
+    {
+        let mut w = Wal::open(&p).unwrap();
+        w.append_seq(&WalEntry::Added { sheet: 0, stroke: synth(9, 300.0, 20, ToolKind::Pen) }, 7).unwrap();
+    } // crash: the record survives
+    let mut w = Wal::open(&p).unwrap();
+    assert_eq!(w.records_written(), 1);
+    w.append_seq(&WalEntry::Removed(9), 1).unwrap();
+    // The leftover was replayed into the document at open, so any save covers it.
+    assert_eq!(w.truncate_through(0).unwrap(), 1);
+    assert!(matches!(Wal::replay(&p).unwrap()[..], [WalEntry::Removed(9)]));
+}

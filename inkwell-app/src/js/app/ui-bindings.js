@@ -20,12 +20,13 @@ import * as presentation from '../ui/presentation.js';
 import { createNewWhiteboard, friendlyError, handlePdfLoadResult, hideOpenProgress, openFileTrigger, showOpenProgress } from '../app/document-loading.js';
 import { getViewport } from '../app/viewport-ref.js';
 import { exportWithSelectedOptions, refreshExportModal, syncExportCustomInputVisibility } from '../ui/export-modal.js';
-import { checkForExternalChanges, hideExternalChangeBanner, reloadExternalPdf } from '../ui/external-change.js';
+import { checkForExternalChanges, keepMineExternal, reloadExternalPdf, saveCopyExternal } from '../ui/external-change.js';
 import { initModalFocusTrap } from '../ui/focus-trap.js';
 import { closeInsertPageModal, openInsertPageModal } from '../ui/insert-page-modal.js';
 import { initLassoSelectionPopover } from '../ui/popovers.js';
 import { cycleReadingMode, setReadingMode } from '../ui/reading-mode.js';
 import { renderShortcutsEditor } from '../ui/shortcuts-editor.js';
+import { setAutosaveEnabled } from './autosave.js';
 
 export function bindAllUIEvents() {
   // Reading mode triggers
@@ -386,9 +387,14 @@ export function bindAllUIEvents() {
   if (reloadExternalBtn) {
     reloadExternalBtn.addEventListener('click', () => { reloadExternalPdf(); });
   }
-  const dismissExternalBtn = $('btnDismissExternalChange');
-  if (dismissExternalBtn) {
-    dismissExternalBtn.addEventListener('click', () => { hideExternalChangeBanner(); });
+  // No plain dismiss: autosave stays paused until one of the three choices.
+  const keepMineBtn = $('btnKeepMineExternal');
+  if (keepMineBtn) {
+    keepMineBtn.addEventListener('click', () => { keepMineExternal(); });
+  }
+  const saveCopyBtn = $('btnSaveCopyExternal');
+  if (saveCopyBtn) {
+    saveCopyBtn.addEventListener('click', () => { saveCopyExternal(); });
   }
   window.addEventListener('focus', () => { checkForExternalChanges(); });
   document.addEventListener('visibilitychange', () => {
@@ -400,14 +406,13 @@ export function bindAllUIEvents() {
     setInterval(() => { checkForExternalChanges(); }, 30000);
   }
 
-  // Autosave delay setting
+  // Autosave on/off (Plan 090: timing comes from the backend FlushPolicy)
   const selAutosave = $('selectAutosaveDelay');
   if (selAutosave) {
-    selAutosave.value = String(state.autosaveDelayMs || 0);
+    selAutosave.value = state.autosaveEnabled ? 'on' : 'off';
     selAutosave.addEventListener('change', () => {
-      const val = parseInt(selAutosave.value, 10) || 0;
-      state.autosaveDelayMs = val;
-      localStorage.setItem('inkwell_autosave_delay', String(val));
+      setAutosaveEnabled(selAutosave.value !== 'off');
+      toolbar.updateSaveStatusUI(state.isSaving ? 'saving' : (state.isDirty ? 'dirty' : 'saved'));
     });
   }
 

@@ -6,7 +6,7 @@
 | **Effort** | M (~350 lines across 6 files) |
 | **Category** | Reliability / Requirement 11 (Autosave) & Requirement 5 (Sync) |
 | **Depends on** | 088 (bounded growth makes frequent saves cheap for sync clients) |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-08; see Outcome) |
 
 ## Why
 
@@ -62,3 +62,36 @@ New smoke checks: autosave fires after simulated 20 s idle (inject a clock) and 
 ## STOP Conditions
 - STOP if an autosave ever writes while the external-change banner is unresolved. That would overwrite the synced version.
 - STOP if moving the save off-thread lets two saves interleave `atomic_write` on the same path.
+
+## Outcome (2026-11-08)
+
+**Autosave (§1).**
+- New `js/app/autosave.js` ticks once a second; the backend's `autosave_tick` wraps `FlushPolicy::decide` (20 s idle / focus loss / 3 min), which remains the single source of truth. Blur and hidden-tab trigger an immediate tick with `focus_lost`.
+- It never runs mid-stroke (`state.cur`, erasing, lasso, shape), with a modal open, while the change-on-disk banner is unresolved, or within 30 s of a failed autosave (no retry storm).
+- Autosaves are silent; the status pill tooltip says "Saved 12:04 · idle".
+- The setting is now On/Off (default On, key `inkwell_autosave`). The old `inkwell_autosave_delay` is deliberately ignored, since its default 0 was never a user choice.
+
+**Edits made while a save runs (found while doing §4; a data-loss bug).** `save_pdf` used to truncate the whole journal after writing, and the frontend then marked the document clean. Strokes drawn while the save ran were in neither the saved PDF nor the journal. The fix:
+- `core/ipc.js` numbers every journalled call (`seq`, after the JS state holds the edit), and a save sends the number its payload reflects.
+- `Wal` records each record's seq; `Wal::truncate_through(n)` drops only records ≤ n, copying kept records byte for byte. Records left over from a crash count as covered.
+- The backend keeps `is_dirty` set when newer seqs arrived during the save, and the frontend keeps `isDirty` when `state.editSeq` moved.
+- Crash replay is now idempotent (`Added` replaces a stroke with the same id), so a kept record that a save already covered can't duplicate a stroke.
+- Tests: core `truncate_through_keeps_edits_made_during_a_save`, `reopened_journal_counts_leftover_records_as_covered`; app `save_trims_only_the_journal_its_snapshot_covers` (mutation-tested: a blanket truncate fails it); smoke T30.
+
+**Close dialog (§2).** A native three-button dialog (`YesNoCancelCustom`: Save / Don't Save / Cancel), kept native on purpose so quitting works even if the page's JS is broken. Cancel, Esc or closing the dialog keeps working. *Don't Save* no longer deletes the journal: `WalOp::Shelve` closes it and renames it to `*.shelved.bin`. The next `open_pdf` of that file reports `shelved_journal_entries`, and the frontend shows a toast with a 44 px **Restore them** action that reopens with `restore_shelved`, folding the records into the live journal before the normal replay. Toasts gained optional actions for this.
+
+**Banner (§3).** Reload / **Keep mine** / **Save a copy** (Save As prefilled `name (BezierNotes copy).pdf`; the session moves to the copy). The bare ✕ is gone: dismissing without choosing would have left autosave paused invisibly. A manual Ctrl+S counts as Keep mine.
+
+**Non-blocking save (§4).** `save_pdf` runs its whole body in `spawn_blocking` (`save_blocking`) under `AppState::save_lock`, from snapshot to publish. Page operations (insert/delete/duplicate/rotate/reorder) take the same lock, so they can't interleave with a save. Inking (`commit_stroke`) doesn't take it. `save_generation` makes a superseded save return without writing (tested). Manual saves may overlap autosaves; the backend orders them.
+
+**Orphaned temps (§5).** `wal::sweep_orphan_temps(target, min_age)` removes only exact `.<name>.inkwell-tmp-<pid>-<n>` siblings that aren't this process's. It runs on open and after every save (60 s minimum age, so another process mid-write is never raced). The torture loop now runs the same sweep after every kill and fails if any temp survives: 200 kills, 0 failures, 122 temps swept.
+
+**Windows journal (§6).** `%LOCALAPPDATA%\BezierNotes\wal\`, with a one-time move of an existing `%TEMP%` journal. Not run on Windows here; it compiles for the host target only, so check it on the Windows CI build.
+
+**Verification.** Rust core 121/121, strict conformance + render diff, app crate 18/18 (new: autosave tick, two save-pipeline tests), clippy clean on both workspaces, boundaries clean, smoke 164/164 (T30: 10 checks), focused suites pass, torture 200/200.
+
+**Not done / limits.**
+- **Inactive tabs.** The close dialog covers the active document; inactive tabs' journals stay as they were and replay on next open, which is the old behaviour.
+- **Save a copy while drawing.** Edits journalled during the save-as go into the old file's journal, which is discarded.
+- **Payload size.** The save payload is still the full stroke list serialised on the JS main thread; for very large documents that, not the PDF write, is the remaining hitch. A later plan could send deltas.
+- **No real-app check.** The native dialog and the real save timing were not exercised in the running desktop app.

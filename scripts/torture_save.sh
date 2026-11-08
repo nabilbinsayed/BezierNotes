@@ -34,12 +34,16 @@ for i in $(seq 1 "$iters"); do
     echo "iteration $i: $out" >&2
     fail=$((fail + 1))
   fi
-  # A killed atomic_write leaves its sibling temp file behind. Count them: a
-  # sync client would upload these, so Plan 090 should sweep them on open.
-  n=$(find "$work" -maxdepth 1 -name '.notes.pdf.inkwell-tmp-*' | wc -l)
+  # A killed atomic_write leaves its sibling temp file behind; a sync client
+  # would upload it. The app sweeps them on open and after each save (Plan
+  # 090): run the same sweep and require that nothing survives it.
+  n=$("$bin" --sweep "$target")
   leftovers=$((leftovers + n))
-  find "$work" -maxdepth 1 -name '.notes.pdf.inkwell-tmp-*' -delete
+  if [ -n "$(find "$work" -maxdepth 1 -name '.notes.pdf.inkwell-tmp-*')" ]; then
+    echo "iteration $i: orphaned temp survived the sweep" >&2
+    fail=$((fail + 1))
+  fi
 done
 
-echo "torture: $iters kills, $fail unopenable, $leftovers orphaned temp files, last: $("$bin" --check "$target")"
+echo "torture: $iters kills, $fail failures, $leftovers orphaned temps swept, last: $("$bin" --check "$target")"
 [ "$fail" -eq 0 ]

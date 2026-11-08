@@ -7,8 +7,13 @@ pub async fn insert_blank_page(
     index: usize,
     width_pt: f64,
     height_pt: f64,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
+    let seq = journal_seq(state.inner(), seq);
+    // Page edits rewrite the base bytes; never interleave with a save's
+    // snapshot -> write -> publish (Plan 090).
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     if !width_pt.is_finite() || !height_pt.is_finite() || width_pt < 72.0 || height_pt < 72.0 || width_pt > 14400.0 || height_pt > 14400.0 {
         return Err(format!("Invalid page dimensions: {width_pt} x {height_pt} pt (must be between 72 and 14400)"));
     }
@@ -55,7 +60,7 @@ pub async fn insert_blank_page(
             index,
             width_pt,
             height_pt,
-        }));
+        }, seq));
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -71,8 +76,13 @@ pub async fn insert_blank_page(
 #[tauri::command]
 pub async fn delete_page(
     index: usize,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
+    // Page edits rewrite the base bytes; never interleave with a save's
+    // snapshot -> write -> publish (Plan 090).
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     {
         let doc_guard = state.doc.lock().unwrap();
         let doc = doc_guard.as_ref().ok_or("No document open")?;
@@ -134,7 +144,7 @@ pub async fn delete_page(
     }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Append(WalEntry::PageDeleted { index }));
+        let _ = tx.send(WalOp::Append(WalEntry::PageDeleted { index }, seq));
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -144,8 +154,13 @@ pub async fn delete_page(
 #[tauri::command]
 pub async fn duplicate_page(
     index: usize,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
+    let seq = journal_seq(state.inner(), seq);
+    // Page edits rewrite the base bytes; never interleave with a save's
+    // snapshot -> write -> publish (Plan 090).
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     let target_idx = index + 1;
     {
         let doc_guard = state.doc.lock().unwrap();
@@ -211,9 +226,9 @@ pub async fn duplicate_page(
             index: target_idx,
             width_pt: out_w,
             height_pt: out_h,
-        }));
+        }, seq));
         for stroke in cloned_strokes {
-            let _ = tx.send(WalOp::Append(WalEntry::Added { sheet: target_idx, stroke }));
+            let _ = tx.send(WalOp::Append(WalEntry::Added { sheet: target_idx, stroke }, seq));
         }
         for img in cloned_images {
             let _ = tx.send(WalOp::Append(WalEntry::ImageAdded {
@@ -224,7 +239,7 @@ pub async fn duplicate_page(
                 width: img.width,
                 height: img.height,
                 data_url: img.data_url,
-            }));
+            }, seq));
         }
         for txt in cloned_texts {
             let _ = tx.send(WalOp::Append(WalEntry::TextUpsert {
@@ -239,7 +254,7 @@ pub async fn duplicate_page(
                 italic: txt.italic,
                 width: txt.width,
                 height: txt.height,
-            }));
+            }, seq));
         }
     }
 
@@ -255,8 +270,13 @@ pub async fn duplicate_page(
 pub async fn rotate_page(
     index: usize,
     clockwise: bool,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
+    let seq = journal_seq(state.inner(), seq);
+    // Page edits rewrite the base bytes; never interleave with a save's
+    // snapshot -> write -> publish (Plan 090).
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
     let mut orig_w = 595.0;
     let mut orig_h = 842.0;
@@ -354,7 +374,7 @@ pub async fn rotate_page(
     }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Append(WalEntry::PageRotated { index, clockwise }));
+        let _ = tx.send(WalOp::Append(WalEntry::PageRotated { index, clockwise }, seq));
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -371,8 +391,13 @@ pub async fn rotate_page(
 pub async fn reorder_page(
     from_index: usize,
     to_index: usize,
+    seq: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let seq = journal_seq(state.inner(), seq);
+    // Page edits rewrite the base bytes; never interleave with a save's
+    // snapshot -> write -> publish (Plan 090).
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     if from_index == to_index {
         return Ok(true);
     }
@@ -434,7 +459,7 @@ pub async fn reorder_page(
     }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Append(WalEntry::PageReordered { from_index, to_index }));
+        let _ = tx.send(WalOp::Append(WalEntry::PageReordered { from_index, to_index }, seq));
     }
 
     state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);

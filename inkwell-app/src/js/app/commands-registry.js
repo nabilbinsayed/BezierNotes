@@ -27,6 +27,11 @@ import { getViewport } from '../app/viewport-ref.js';
 import { exportPdfWithDialog, prepareAllImagesForSave } from '../ui/export-modal.js';
 import { openInsertPageModal } from '../ui/insert-page-modal.js';
 import { cycleReadingMode } from '../ui/reading-mode.js';
+import { hideExternalChangeBanner } from '../ui/external-change.js';
+import { noteFlushed } from './autosave.js';
+
+// A manual Ctrl+S may overlap an autosave; the backend orders them.
+let _savesInFlight = 0;
 
 export function registerCoreCommands() {
   const reg = commandsModule.commands;
@@ -53,28 +58,46 @@ export function registerCoreCommands() {
     title: 'Save Document',
     category: 'File',
     shortcut: 'Ctrl+S',
-    execute: async () => {
+    // opts.silent: autosave (no toast, never resolves the change-on-disk banner).
+    // opts.saveAsCopyName: Save As with this name prefilled (banner "Save a copy").
+    execute: async ({ silent = false, reason = 'manual', saveAsCopyName = null } = {}) => {
+      // A manual save is the user choosing their version over a changed file.
+      if (!silent && !saveAsCopyName && state.externalChangePending) {
+        state.externalChangePending = false;
+        hideExternalChangeBanner();
+      }
+      // Edits made while this save runs keep the document dirty (and stay in
+      // the journal: the backend trims only what this snapshot covers).
+      const editSeqAtSnapshot = state.editSeq;
+      _savesInFlight += 1;
       try {
         state.isSaving = true;
         toolbar.updateSaveStatusUI('saving');
         const imagesToSave = prepareAllImagesForSave();
-        const savedPath = await ipc.savePdf(state.currentDocPath, state.strokes, imagesToSave, state.textObjects);
+        const target = saveAsCopyName ? null : state.currentDocPath;
+        const savedPath = await ipc.savePdf(target, state.strokes, imagesToSave, state.textObjects, { defaultName: saveAsCopyName });
         if (savedPath) {
           state.currentDocPath = savedPath;
           state.currentDocTitle = savedPath.split(/[\\/]/).pop();
-          state.isDirty = false;
-          toolbar.updateSaveStatusUI('saved');
-          toast.showToast('Document saved successfully', 'success');
+          state.isDirty = state.editSeq !== editSeqAtSnapshot;
+          state.lastSavedAt = Date.now();
+          state.lastSaveReason = reason;
+          noteFlushed(reason);
+          toolbar.updateSaveStatusUI(state.isDirty ? 'dirty' : 'saved');
+          if (!silent) toast.showToast('Document saved successfully', 'success');
           return true;
         }
         return false;
       } catch (e) {
         toolbar.updateSaveStatusUI('dirty');
         const msg = friendlyError(e);
-        if (msg && msg !== 'CANCELLED') toast.showToast('Save failed: ' + msg, 'error');
+        if (msg && msg !== 'CANCELLED') {
+          toast.showToast((silent ? 'Autosave failed: ' : 'Save failed: ') + msg, 'error');
+        }
         return false;
       } finally {
-        state.isSaving = false;
+        _savesInFlight -= 1;
+        state.isSaving = _savesInFlight > 0;
       }
     },
   });

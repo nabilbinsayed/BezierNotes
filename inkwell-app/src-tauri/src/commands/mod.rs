@@ -64,10 +64,11 @@ fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
     let (tx, rx) = std::sync::mpsc::channel::<WalOp>();
     std::thread::spawn(move || {
         let mut wal = wal;
+        let mut shelve_ack = None;
         while let Ok(op) = rx.recv() {
             match op {
-                WalOp::Append(entry) => {
-                    if let Err(e) = wal.append(&entry) {
+                WalOp::Append(entry, seq) => {
+                    if let Err(e) = wal.append_seq(&entry, seq) {
                         eprintln!("[inkwell] Background WAL append error: {e}");
                     }
                 }
@@ -88,11 +89,55 @@ fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
                     }
                     break;
                 }
+                WalOp::TruncateThrough(seq, ack) => {
+                    if let Err(e) = wal.truncate_through(seq) {
+                        eprintln!("[inkwell] Background WAL trim error: {e}");
+                    }
+                    if let Some(sender) = ack {
+                        let _ = sender.send(());
+                    }
+                }
+                WalOp::Shelve(ack) => {
+                    shelve_ack = Some(ack);
+                    break;
+                }
                 WalOp::Close => break,
+            }
+        }
+        if let Some(ack) = shelve_ack {
+            // Close the handle first: Windows cannot rename an open file.
+            let path = wal.path().to_path_buf();
+            drop(wal);
+            let shelved = shelved_wal_path(&path);
+            if let Err(e) = std::fs::rename(&path, &shelved) {
+                eprintln!("[inkwell] Could not set the journal aside ({path:?} -> {shelved:?}): {e}");
+            }
+            if let Some(sender) = ack {
+                let _ = sender.send(());
             }
         }
     });
     tx
+}
+
+/// The journal sequence number for an edit: the frontend numbers every
+/// journalled mutation (`core/ipc.js`), and a save trims only the records its
+/// snapshot covers. Calls without one (older callers) count as "now".
+fn journal_seq(state: &AppState, seq: Option<u64>) -> u64 {
+    use std::sync::atomic::Ordering;
+    match seq {
+        Some(s) => {
+            state.journal_seq_hi.fetch_max(s, Ordering::AcqRel);
+            s
+        }
+        None => state.journal_seq_hi.load(Ordering::Acquire),
+    }
+}
+
+/// Where "Don't Save" puts a session's journal: next to the live journal,
+/// out of the sync folder, offered back on the next open (see `open_pdf`).
+fn shelved_wal_path(wal_path: &Path) -> PathBuf {
+    wal_path.with_extension("shelved.bin")
 }
 
 fn hash_bytes_fnv1a(bytes: &[u8]) -> u64 {
@@ -126,7 +171,23 @@ fn wal_path_for(doc_path: &Path) -> PathBuf {
 
     #[cfg(windows)]
     {
-        std::env::temp_dir().join(filename)
+        // %LOCALAPPDATA%, not %TEMP%: Storage Sense and cleanup tools purge
+        // %TEMP%, which is exactly where a crash journal must survive.
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("BezierNotes")
+            .join("wal");
+        let _ = std::fs::create_dir_all(&base);
+        let target = base.join(&filename);
+        // One-time migration of a journal written by an older build.
+        let legacy = std::env::temp_dir().join(&filename);
+        if !target.exists() && legacy.exists() && std::fs::rename(&legacy, &target).is_err() {
+            if std::fs::copy(&legacy, &target).is_ok() {
+                let _ = std::fs::remove_file(&legacy);
+            }
+        }
+        target
     }
 
     #[cfg(not(windows))]
@@ -212,6 +273,9 @@ pub struct OpenPdfResult {
     pub outline: Vec<inkwell_pdf::TocItem>,
     #[serde(default)]
     pub bookmarks: Vec<inkwell_core::doc::Bookmark>,
+    /// Records in a journal set aside by "Don't Save" on quit (Plan 090).
+    #[serde(default)]
+    pub shelved_journal_entries: usize,
 }
 
 #[derive(Debug, Deserialize)]

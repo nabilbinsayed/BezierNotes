@@ -131,9 +131,17 @@ export function updateSaveStatusUI(status) {
     text.textContent = 'Saving...';
   } else if (status === 'dirty') {
     badge.classList.add('dirty');
-    text.textContent = state.autosaveDelayMs > 0 ? 'Autosaving...' : 'Unsaved';
+    text.textContent = 'Unsaved';
+    badge.title = state.autosaveEnabled
+      ? 'Changes are journalled; autosave writes the PDF after 20 s idle or when you switch away'
+      : 'Autosave is off; press Ctrl+S to save';
   } else {
     text.textContent = 'Vector Ready';
+    if (state.lastSavedAt) {
+      const at = new Date(state.lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const why = { idle: 'idle', focus: 'switched away', interval: '3-minute save', manual: 'saved by you' }[state.lastSaveReason] || '';
+      badge.title = `Saved ${at}${why ? ' · ' + why : ''}`;
+    }
   }
 }
 

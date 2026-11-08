@@ -155,7 +155,13 @@ export const state = {
   // Persistence & Save State (History stacks moved to history.js)
   isDirty: false,
   isSaving: false,
-  autosaveDelayMs: parseInt(localStorage.getItem('inkwell_autosave_delay') || '0', 10),
-  autosaveTimer: null,
+  // Policy-driven autosave (Plan 090, app/autosave.js); set at startup.
+  autosaveEnabled: true,
+  // Incremented by every document mutation; a save leaves the document dirty
+  // when it moved while the save was running.
+  editSeq: 0,
+  // The open file changed on disk and the user has not yet chosen Reload /
+  // Keep mine / Save a copy: no autosave may overwrite it meanwhile.
+  externalChangePending: false,
   lastSavedAt: null,
 };

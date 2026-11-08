@@ -66,7 +66,7 @@ The architecture is partitioned into:
 | M4 | Review, Signing, Presentation & Smoothness | Annotation review, signature/stamp studio, presentation mode, lazy thumbnails, interaction polish (F19-F23) | M1-M3 | DONE |
 | M5 | Instant Document Loading | Profiled and removed PDF open-path stalls; first page + adjacent-page prefetch (F24) | M1-M4 | DONE |
 | M6 | Extreme Smoothness & Evolution | Non-blocking compositor with offscreen dry cache, incremental wet-stroke chunking, zero-copy tile/text pipeline, AABB hit-testing, hold-to-snap shapes, partial vector eraser, smart PDF export and an external-change guard (F25-F32) | M1-M5 | DONE |
-| M7 | Format Integrity, Multi-Device Merge & v1.0 | Wave 087–098 (see `plans/README.md`): conformance harness, native xref-stream saves with bounded growth, Unicode text notes, decomposition, spec autosave, CRDT sidecar and conflict-copy merge, latency gate, v1.0 release; then parametric shapes, AcroForms, infinite canvas | M1-M6 | IN PROGRESS (087–089, 093 done) |
+| M7 | Format Integrity, Multi-Device Merge & v1.0 | Wave 087–098 (see `plans/README.md`): conformance harness, native xref-stream saves with bounded growth, Unicode text notes, decomposition, spec autosave, CRDT sidecar and conflict-copy merge, latency gate, v1.0 release; then parametric shapes, AcroForms, infinite canvas | M1-M6 | IN PROGRESS (087–090, 093 done) |
 
 ## Interface Contracts
 ### `toolManager` ↔ `state`

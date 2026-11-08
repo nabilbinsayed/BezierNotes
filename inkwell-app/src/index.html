@@ -468,8 +468,11 @@
           <strong id="externalChangeTitle">This PDF changed on disk</strong>
           <span id="externalChangeDetail">Another app or cloud sync updated the file. Your unsaved ink is safe.</span>
         </span>
-        <button id="btnReloadExternalPdf" type="button" class="btn-secondary external-change-action">Reload from Disk</button>
-        <button id="btnDismissExternalChange" type="button" class="external-change-dismiss" aria-label="Dismiss notification">✕</button>
+        <span class="external-change-actions">
+          <button id="btnReloadExternalPdf" type="button" class="btn-secondary external-change-action" title="Use the version on disk; your unsaved annotations are kept on top">Reload</button>
+          <button id="btnKeepMineExternal" type="button" class="btn-secondary external-change-action" title="Keep working on your version; your next save replaces the changed file">Keep mine</button>
+          <button id="btnSaveCopyExternal" type="button" class="btn-secondary external-change-action" title="Save your version as a separate file and leave the changed one alone">Save a copy</button>
+        </span>
       </div>
 
       <span id="evtName" style="display:none">pointerrawupdate</span>
@@ -1463,19 +1466,14 @@
             <div class="settings-card">
               <div class="setting-header-row">
                 <div class="toggle-text">
-                  <span class="setting-title">Autosave After Delay</span>
-                  <span class="setting-desc">Automatically saves document changes to disk after drawing stops</span>
+                  <span class="setting-title">Autosave</span>
+                  <span class="setting-desc">Writes the PDF when you pause or switch away, not on every stroke, so cloud sync isn't flooded. Every stroke is journalled instantly either way.</span>
                 </div>
               </div>
               <div class="setting-select-wrap" style="margin-top: 10px;">
                 <select id="selectAutosaveDelay" class="custom-select settings-select">
-                  <option value="0" selected>Off (Manual Ctrl+S only)</option>
-                  <option value="500">After 500 ms</option>
-                  <option value="1000">After 1 second</option>
-                  <option value="2000">After 2 seconds</option>
-                  <option value="5000">After 5 seconds</option>
-                  <option value="10000">After 10 seconds</option>
-                  <option value="30000">After 30 seconds</option>
+                  <option value="on" selected>On (recommended): after 20 s idle, on switching away, at least every 3 min</option>
+                  <option value="off">Off (Ctrl+S only; edits are still journalled)</option>
                 </select>
               </div>
             </div>

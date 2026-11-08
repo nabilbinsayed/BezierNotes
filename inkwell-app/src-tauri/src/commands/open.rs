@@ -16,7 +16,7 @@ pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) 
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        let result = open_pdf(path_str.clone(), state).await?;
+        let result = open_pdf(path_str.clone(), None, state).await?;
         Ok((path_str, result))
     } else {
         Err("CANCELLED".to_string())
@@ -41,6 +41,9 @@ fn replay_wal_journal(
             for entry in entries {
                 match entry {
                     WalEntry::Added { sheet, stroke } => {
+                        // Idempotent: a record a save already covered (kept
+                        // because it arrived mid-save) replaces, never duplicates.
+                        doc.remove_stroke(stroke.id);
                         doc.push_stroke(sheet, stroke);
                         recovered_strokes += 1;
                     }
@@ -228,7 +231,11 @@ fn replay_wal_journal(
 }
 
 #[tauri::command]
-pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<OpenPdfResult, String> {
+pub async fn open_pdf(
+    path_str: String,
+    restore_shelved: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<OpenPdfResult, String> {
     let open_started = Instant::now();
     let path = PathBuf::from(&path_str);
     if path_str.contains("..") || path.components().any(|c| c == std::path::Component::ParentDir) {
@@ -238,6 +245,18 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         return Err(format!("File does not exist: {path:?}"));
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
+    // Temps from saves that were killed mid-write sit in the (synced) folder.
+    inkwell_core::wal::sweep_orphan_temps(&path, std::time::Duration::from_secs(60));
+
+    // A journal set aside by "Don't Save" is offered back, never replayed
+    // silently; on "Restore" the frontend reopens with restore_shelved.
+    let shelved = shelved_wal_path(&wal_path_for(&path));
+    let shelved_journal_entries = if restore_shelved.unwrap_or(false) {
+        restore_shelved_journal(&path, &shelved)?;
+        0
+    } else {
+        Wal::replay(&shelved).map(|e| e.len()).unwrap_or(0)
+    };
 
     let arc_bytes = Arc::new(bytes);
     let (mut page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
@@ -331,6 +350,7 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         loaded_texts,
         outline,
         bookmarks: doc_bookmarks,
+        shelved_journal_entries,
     })
 }
 
@@ -490,5 +510,24 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         loaded_texts,
         outline,
         bookmarks: doc_bookmarks,
+        shelved_journal_entries: 0,
     })
+}
+
+/// Move a set-aside journal's records into the live journal for `doc_path`,
+/// so the normal crash replay that follows brings them back, then delete it.
+fn restore_shelved_journal(doc_path: &Path, shelved: &Path) -> Result<(), String> {
+    let entries = Wal::replay(shelved).map_err(|e| format!("Could not read the set-aside changes: {e}"))?;
+    if entries.is_empty() {
+        let _ = std::fs::remove_file(shelved);
+        return Ok(());
+    }
+    let mut live = Wal::open(wal_path_for(doc_path)).map_err(|e| format!("Could not open the journal: {e}"))?;
+    for e in &entries {
+        live.append(e).map_err(|e| format!("Could not restore the set-aside changes: {e}"))?;
+    }
+    drop(live);
+    std::fs::remove_file(shelved).map_err(|e| format!("Restored, but could not remove {shelved:?}: {e}"))?;
+    eprintln!("[inkwell] Restored {} set-aside journal records for {doc_path:?}", entries.len());
+    Ok(())
 }

@@ -2980,6 +2980,152 @@ with sync_playwright() as pw:
           f"res={external_res}")
 
     # -------------------------------------------------------------
+    # T30: Policy autosave, edits during a save, change-on-disk choices,
+    #      set-aside changes (Plan 090)
+    # -------------------------------------------------------------
+    print("\n=== T30 Autosave & Safe Save ===", flush=True)
+    autosave_res = pg.evaluate("""(async () => {
+      const autosave = await import('./js/app/autosave.js');
+      const ext = await import('./js/ui/external-change.js');
+      const stub = window.__inkwell_stub;
+      const saved = [];   // [{cmd, args}]
+      const ticks = [];
+      stub.autosave_tick = async (a) => {
+        ticks.push(a);
+        // Mirror FlushPolicy (unit-tested in Rust): idle 20 s, focus, 180 s.
+        if (!a.dirty) return null;
+        if (a.focusLost) return 'focus';
+        if (a.sinceInputS >= 20) return 'idle';
+        if (a.sinceFlushS >= 180) return 'interval';
+        return null;
+      };
+      stub.save_pdf = async (a) => { saved.push({ cmd: 'save_pdf', args: a }); return a.outPathStr; };
+      stub.save_pdf_dialog = async (a) => { saved.push({ cmd: 'save_pdf_dialog', args: a }); return '/tmp/notes (BezierNotes copy).pdf'; };
+
+      window.state.currentDocPath = '/tmp/notes.pdf';
+      window.state.autosaveEnabled = true;
+      window.state.externalChangePending = false;
+      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
+      const dirty = () => { window.state.isDirty = true; };
+      const out = {};
+
+      // 1. Recent edit: the policy says wait.
+      dirty(); autosave._ageForTest(2000);
+      out.recentNoSave = (await autosave.autosaveTick(false)) === null && saved.length === 0;
+
+      // 2. 20 s idle: one silent save, no success toast.
+      const toastsBefore = document.querySelectorAll('.toast').length;
+      dirty(); autosave._ageForTest(21000);
+      out.idleReason = await autosave.autosaveTick(false);
+      out.idleSaved = saved.length === 1 && saved[0].cmd === 'save_pdf';
+      out.idleSilent = !Array.from(document.querySelectorAll('.toast')).slice(toastsBefore)
+        .some(t => /saved successfully/i.test(t.textContent));
+      out.cleanAfter = window.state.isDirty === false;
+
+      // 3. Focus loss saves even right after an edit.
+      dirty(); autosave._ageForTest(1000);
+      out.focusReason = await autosave.autosaveTick(true);
+
+      // 4. Never mid-stroke, never with a modal open, never while the file
+      //    changed on disk is unresolved.
+      const n = saved.length;
+      dirty(); autosave._ageForTest(60000);
+      window.state.cur = { points: [] };
+      out.noSaveMidStroke = (await autosave.autosaveTick(true)) === null;
+      window.state.cur = null;
+      const modal = document.getElementById('insertPageModal');
+      modal.classList.remove('hidden');
+      out.noSaveWithModal = (await autosave.autosaveTick(true)) === null;
+      modal.classList.add('hidden');
+      window.state.externalChangePending = true;
+      out.noSaveWhilePending = (await autosave.autosaveTick(true)) === null;
+      out.blockedNoWrites = saved.length === n;
+
+      // 5. Banner: three 44 px choices; Keep mine resolves and autosave resumes.
+      ext.showExternalChangeBanner();
+      const ids = ['btnReloadExternalPdf', 'btnKeepMineExternal', 'btnSaveCopyExternal'];
+      out.bannerButtons = ids.map(id => {
+        const b = document.getElementById(id);
+        return !!b && b.getBoundingClientRect().height >= 44;
+      });
+      out.noDismissX = !document.getElementById('btnDismissExternalChange');
+      document.getElementById('btnKeepMineExternal').click();
+      out.keepMineResolved = window.state.externalChangePending === false
+        && document.getElementById('externalChangeBanner').classList.contains('hidden');
+      out.resumed = (await autosave.autosaveTick(true)) === 'focus';
+
+      // 6. Save a copy: Save As prefilled with "(BezierNotes copy)", then resolved.
+      window.state.currentDocPath = '/tmp/notes.pdf';
+      window.state.externalChangePending = true;
+      ext.showExternalChangeBanner();
+      out.copyOk = await ext.saveCopyExternal();
+      const last = saved[saved.length - 1];
+      out.copyDialog = last.cmd === 'save_pdf_dialog' && last.args.defaultName === 'notes (BezierNotes copy).pdf';
+      out.copyResolved = window.state.externalChangePending === false;
+      window.state.currentDocPath = '/tmp/notes.pdf';
+
+      // 7. An edit made while a save is running keeps the document dirty, and
+      //    the save carries the journal number its snapshot reflects.
+      const ipc = await import('./js/core/ipc.js');
+      let release;
+      stub.save_pdf = (a) => new Promise(res => { saved.push({ cmd: 'save_pdf', args: a }); release = () => res(a.outPathStr); });
+      dirty();
+      const seqAtStart = ipc.currentJournalSeq();
+      const p = window.commands.execute('file.save');
+      await new Promise(r => setTimeout(r, 0));
+      window.documentOps.addStroke({ id: 'during_save', kind: 'pen', rgb: [0, 0, 0], base_width: 2, sheet: 0,
+        points: [{ x: 10, y: 10, p: 0.5 }, { x: 40, y: 20, p: 0.5 }] }, { recordHistory: false });
+      release();
+      out.manualOk = await p;
+      out.dirtyAfterConcurrentEdit = window.state.isDirty === true;
+      out.snapshotSeq = saved[saved.length - 1].args.journalSeq === seqAtStart;
+
+      // 8. Journal calls carry increasing sequence numbers.
+      const seqs = [];
+      const realCommit = stub.commit_stroke;
+      stub.commit_stroke = async (a) => { seqs.push(a.seq); return realCommit(a); };
+      await ipc.commitStroke(0, 'pen', [0, 0, 0], 2, [{ x: 1, y: 1, p: 0.5 }], 'j1');
+      await ipc.commitStroke(0, 'pen', [0, 0, 0], 2, [{ x: 2, y: 2, p: 0.5 }], 'j2');
+      stub.commit_stroke = realCommit;
+      out.seqsIncrease = seqs.length === 2 && seqs[1] === seqs[0] + 1;
+
+      // 9. Changes set aside by "Don't Save" are offered, and Restore reopens
+      //    with restoreShelved.
+      const opened = [];
+      const realOpen = stub.open_pdf;
+      stub.open_pdf = async (a) => { opened.push(a); return Object.assign(await realOpen(a), { shelved_journal_entries: a.restoreShelved ? 0 : 3 }); };
+      const loading = await import('./js/app/document-loading.js');
+      const res = await ipc.openPdf('/tmp/notes.pdf');
+      loading.handlePdfLoadResult('notes.pdf', '/tmp/notes.pdf', res);
+      const offer = Array.from(document.querySelectorAll('.toast')).find(t => /chose not to save 3 changes/.test(t.textContent));
+      const restoreBtn = offer && offer.querySelector('.toast-action');
+      out.offerShown = !!restoreBtn && restoreBtn.getBoundingClientRect().height >= 44;
+      if (restoreBtn) restoreBtn.click();
+      await new Promise(r => setTimeout(r, 50));
+      out.restoreReopened = opened.length === 2 && opened[1].restoreShelved === true;
+      stub.open_pdf = realOpen;
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    a = autosave_res
+    check("autosave waits while you are still editing", a["recentNoSave"], f"res={a}")
+    check("autosave saves silently after 20 s idle and marks the document clean",
+          a["idleReason"] == "idle" and a["idleSaved"] and a["idleSilent"] and a["cleanAfter"], f"res={a}")
+    check("switching away saves at once", a["focusReason"] == "focus", f"res={a}")
+    check("no autosave mid-stroke, with a modal open, or while a changed file is unresolved",
+          a["noSaveMidStroke"] and a["noSaveWithModal"] and a["noSaveWhilePending"] and a["blockedNoWrites"], f"res={a}")
+    check("change-on-disk banner offers Reload / Keep mine / Save a copy at 44 px, no bare dismiss",
+          all(a["bannerButtons"]) and a["noDismissX"], f"res={a}")
+    check("Keep mine resolves the banner and autosave resumes", a["keepMineResolved"] and a["resumed"], f"res={a}")
+    check("Save a copy opens Save As prefilled with '(BezierNotes copy)' and resolves",
+          a["copyOk"] and a["copyDialog"] and a["copyResolved"], f"res={a}")
+    check("an edit made during a save keeps the document dirty; the save carries its snapshot journal seq",
+          a["manualOk"] and a["dirtyAfterConcurrentEdit"] and a["snapshotSeq"], f"res={a}")
+    check("journalled calls carry increasing sequence numbers", a["seqsIncrease"], f"res={a}")
+    check("set-aside changes are offered with a 44 px Restore that reopens with restoreShelved",
+          a["offerShown"] and a["restoreReopened"], f"res={a}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)

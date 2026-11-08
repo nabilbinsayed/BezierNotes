@@ -37,6 +37,7 @@ import { updateLassoSelectionPopover, updateTextSelectionPopover } from './ui/po
 import { cycleReadingMode, initReadingMode, setReadingMode } from './ui/reading-mode.js';
 import { renderShortcutsEditor } from './ui/shortcuts-editor.js';
 import { getViewport, setViewport } from './app/viewport-ref.js';
+import { initAutosave } from './app/autosave.js';
 
 let _viewport = null;
 
@@ -59,6 +60,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   compositor.initCompositor({ tilesCanvas, dryCanvas, wetCanvas, viewport: _viewport });
+  initAutosave();
   // Notes drawn before the web fonts load use a fallback face; repaint once they arrive.
   preloadNoteFonts(() => {
     compositor.invalidateDryPageCache();
@@ -182,15 +184,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         drawers.refreshThumbnailBadges();
       }, 450);
     }
-    if (state.autosaveDelayMs > 0 && state.currentDocPath && !state.isSaving) {
-      if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
-      state.autosaveTimer = setTimeout(() => {
-        if (state.isDirty && !state.isSaving) {
-          commandsModule.commands.execute('file.save');
-        }
-      }, state.autosaveDelayMs);
-    }
-
     if (!evt) return;
     const type = evt.type;
     const data = evt.payload || {};

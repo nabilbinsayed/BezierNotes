@@ -31,8 +31,29 @@ export async function invokeTauri(command, args = {}) {
 
 // ---- Document File Operations ----
 
-export async function openPdf(pathStr) {
-  return await invokeTauri('open_pdf', { pathStr });
+/**
+ * @param {{restoreShelved?: boolean}} [opts] restoreShelved brings back the
+ *   changes set aside by "Don't Save" on the last quit (Plan 090).
+ */
+export async function openPdf(pathStr, { restoreShelved = false } = {}) {
+  return await invokeTauri('open_pdf', { pathStr, restoreShelved });
+}
+
+// ---- Journal sequence numbers (Plan 090) ----
+// Every journalled mutation is numbered here, after the JS state already holds
+// it. A save sends the number its snapshot reflects, and the backend trims
+// only journal records at or below it, so edits made while a save runs stay
+// recoverable whatever order the IPC calls arrive in.
+let journalSeq = 0;
+
+function nextJournalSeq() {
+  journalSeq += 1;
+  return journalSeq;
+}
+
+/** The newest journal sequence number handed out so far. */
+export function currentJournalSeq() {
+  return journalSeq;
 }
 
 export async function openPdfDialog() {
@@ -92,12 +113,22 @@ function buildSavePayload(strokes, images, texts) {
   return payload;
 }
 
-export async function savePdf(pathStr, strokes, images, texts) {
+/**
+ * Save the session. `journalSeq` must be read when the payload is built
+ * (it is, synchronously, below). `defaultName` prefills the Save As dialog.
+ */
+export async function savePdf(pathStr, strokes, images, texts, { defaultName = null } = {}) {
   const payload = buildSavePayload(strokes, images, texts);
+  payload.journalSeq = journalSeq;
   if (!pathStr) {
-    return await invokeTauri('save_pdf_dialog', payload);
+    return await invokeTauri('save_pdf_dialog', { ...payload, defaultName });
   }
   return await invokeTauri('save_pdf', { outPathStr: pathStr, ...payload });
+}
+
+/** Ask the backend's FlushPolicy whether to autosave now; returns a reason or null. */
+export async function autosaveTick(dirty, sinceInputS, sinceFlushS, focusLost) {
+  return await invokeTauri('autosave_tick', { dirty, sinceInputS, sinceFlushS, focusLost });
 }
 
 /**
@@ -139,7 +170,7 @@ export async function newWhiteboard() {
 }
 
 export async function insertBlankPage(afterIndex = 0, widthPt = 595.0, heightPt = 842.0) {
-  return await invokeTauri('insert_blank_page', { index: afterIndex, widthPt, heightPt });
+  return await invokeTauri('insert_blank_page', { index: afterIndex, widthPt, heightPt, seq: nextJournalSeq() });
 }
 
 export async function extractOutline() {
@@ -171,6 +202,7 @@ export async function commitStroke(sheet, tool, rgb, baseWidth, points, clientId
   }));
 
   return await invokeTauri('commit_stroke', {
+      seq: nextJournalSeq(),
     sheet: sheet || 0,
     tool: tool || 'pen',
     rgb: rgb || [0.08, 0.09, 0.14],
@@ -181,7 +213,7 @@ export async function commitStroke(sheet, tool, rgb, baseWidth, points, clientId
 }
 
 export async function deleteStroke(strokeIdStr) {
-  return await invokeTauri('delete_stroke', { strokeIdStr: String(strokeIdStr) });
+  return await invokeTauri('delete_stroke', { strokeIdStr: String(strokeIdStr), seq: nextJournalSeq() });
 }
 
 // ---- WAL Mutation Journaling (Images & Text) ----
@@ -191,6 +223,7 @@ export function journalImageMutation(op, imgObj) {
   if (op === 'add' || op === 'upsert') {
     const url = imgObj.dataUrl || imgObj.data_url || '';
     return invokeTauri('journal_image_mutation', {
+      seq: nextJournalSeq(),
       op: 'upsert',
       image: {
         id: String(imgObj.id),
@@ -209,6 +242,7 @@ export function journalImageMutation(op, imgObj) {
     });
   } else if (op === 'delete' || op === 'remove') {
     return invokeTauri('journal_image_mutation', {
+      seq: nextJournalSeq(),
       op: 'delete',
       image: null,
       imageId: String(imgObj.id),
@@ -225,6 +259,7 @@ export function journalTextMutation(op, textObj) {
   if (!textObj) return;
   if (op === 'add' || op === 'upsert') {
     invokeTauri('journal_text_mutation', {
+      seq: nextJournalSeq(),
       op: 'upsert',
       text: {
         id: String(textObj.id),
@@ -246,6 +281,7 @@ export function journalTextMutation(op, textObj) {
     });
   } else if (op === 'delete' || op === 'remove') {
     invokeTauri('journal_text_mutation', {
+      seq: nextJournalSeq(),
       op: 'delete',
       text: null,
       textId: String(textObj.id),
@@ -259,19 +295,19 @@ export function journalTextMutation(op, textObj) {
 // ---- Page Operations ----
 
 export async function deletePage(pageIndex) {
-  return await invokeTauri('delete_page', { index: pageIndex });
+  return await invokeTauri('delete_page', { index: pageIndex, seq: nextJournalSeq() });
 }
 
 export async function reorderPages(fromIndex, toIndex) {
-  return await invokeTauri('reorder_page', { fromIndex, toIndex });
+  return await invokeTauri('reorder_page', { fromIndex, toIndex, seq: nextJournalSeq() });
 }
 
 export async function duplicatePage(pageIndex) {
-  return await invokeTauri('duplicate_page', { index: pageIndex });
+  return await invokeTauri('duplicate_page', { index: pageIndex, seq: nextJournalSeq() });
 }
 
 export async function rotatePage(pageIndex, clockwise = true) {
-  return await invokeTauri('rotate_page', { index: pageIndex, clockwise });
+  return await invokeTauri('rotate_page', { index: pageIndex, clockwise, seq: nextJournalSeq() });
 }
 
 // ---- Native Stylus evdev Hardware Stream ----

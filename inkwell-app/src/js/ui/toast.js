@@ -46,14 +46,20 @@ function armDismiss(toast, duration) {
   toast._dismissTimer = setTimeout(() => dismissToast(toast), duration);
 }
 
-export function showToast(message, type = 'info') {
+/**
+ * @param {string} message
+ * @param {'info'|'success'|'warning'|'error'} [type]
+ * @param {{actions?: {label: string, onClick: Function}[], duration?: number}} [opts]
+ *   actions render as 44 px buttons; clicking one runs it and dismisses the toast.
+ */
+export function showToast(message, type = 'info', { actions = [], duration = null } = {}) {
   const container = ensureContainer();
   const text = String(message == null ? '' : message);
   if (!text) return null;
 
   // Coalesce an identical toast that is still on screen instead of stacking
   // three copies of "Colour saved" when the user clicks a few slots quickly.
-  const existing = Array.from(container.children).find(t => t.dataset.message === text);
+  const existing = actions.length ? null : Array.from(container.children).find(t => t.dataset.message === text);
   if (existing) {
     existing.classList.remove('toast-leaving');
     existing.classList.add('show');
@@ -85,6 +91,28 @@ export function showToast(message, type = 'info') {
   life.className = 'toast-life';
   life.setAttribute('aria-hidden', 'true');
   toast.appendChild(label);
+  if (actions.length) {
+    const row = document.createElement('span');
+    row.className = 'toast-actions';
+    for (const a of actions) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action';
+      btn.textContent = a.label;
+      btn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        dismissToast(toast);
+        try {
+          a.onClick();
+        } catch (err) {
+          console.warn('[inkwell/toast] action failed:', err);
+        }
+      });
+      row.appendChild(btn);
+    }
+    toast.appendChild(row);
+    toast.title = '';
+  }
   toast.appendChild(life);
   container.appendChild(toast);
 
@@ -97,6 +125,7 @@ export function showToast(message, type = 'info') {
   });
 
   requestAnimationFrame(() => toast.classList.add('show'));
-  armDismiss(toast, DEFAULT_DURATION);
+  // A toast that asks for a decision stays long enough to make it.
+  armDismiss(toast, duration || (actions.length ? 20000 : DEFAULT_DURATION));
   return toast;
 }

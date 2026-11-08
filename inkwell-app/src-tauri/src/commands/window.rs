@@ -62,3 +62,36 @@ pub async fn close_window(window: tauri::Window) -> Result<(), String> {
 pub fn check_pdfium_status(state: State<AppState>) -> bool {
     state.pdfium.lock().map(|guard| guard.is_some()).unwrap_or(false)
 }
+
+/// One tick of the autosave scheduler (Plan 090). The frontend reports what
+/// it knows; `FlushPolicy` (SPEC §5: 20 s pen idle, focus loss, 3 min
+/// ceiling) decides. Returns the reason to save now, or None.
+#[tauri::command]
+pub fn autosave_tick(dirty: bool, since_input_s: f64, since_flush_s: f64, focus_lost: bool) -> Option<String> {
+    use inkwell_core::wal::{FlushPolicy, FlushReason, FlushSignals};
+    let signals = FlushSignals { dirty, focus_lost, explicit: false, closing: false };
+    FlushPolicy::default().decide(signals, since_input_s, since_flush_s).map(|r| {
+        match r {
+            FlushReason::Idle => "idle",
+            FlushReason::MaxInterval => "interval",
+            FlushReason::FocusLost => "focus",
+            FlushReason::Explicit => "explicit",
+            FlushReason::Closing => "closing",
+        }
+        .to_string()
+    })
+}
+
+#[cfg(test)]
+mod autosave_tick_tests {
+    use super::autosave_tick;
+
+    #[test]
+    fn follows_the_spec_flush_policy() {
+        assert_eq!(autosave_tick(false, 999.0, 999.0, true), None, "clean documents never save");
+        assert_eq!(autosave_tick(true, 5.0, 5.0, false), None, "still drawing");
+        assert_eq!(autosave_tick(true, 20.0, 30.0, false).as_deref(), Some("idle"));
+        assert_eq!(autosave_tick(true, 1.0, 180.0, false).as_deref(), Some("interval"));
+        assert_eq!(autosave_tick(true, 1.0, 1.0, true).as_deref(), Some("focus"));
+    }
+}
