@@ -5984,3 +5984,74 @@ body.presentation-mode .stage {
   font-size: 12px;
   color: var(--text-muted, #94a3b8);
 }
+
+/* ---- Ink latency HUD (Plan 094) ---- */
+.latency-hud {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9000;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #e2e8f0;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: auto;
+}
+
+.latency-hud.hidden {
+  display: none;
+}
+
+.latency-hud-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-weight: 650;
+  color: #99f6e4;
+}
+
+.latency-hud-reset {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.latency-hud-reset:focus-visible {
+  outline: 2px solid #5eead4;
+  outline-offset: 1px;
+}
+
+.latency-hud-table th {
+  text-align: left;
+  font-weight: 500;
+  padding-right: 10px;
+  color: #94a3b8;
+}
+
+.latency-hud-table td {
+  text-align: right;
+  padding-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-hud canvas {
+  display: block;
+  margin: 6px 0 4px;
+}
+
+.latency-hud-meta {
+  color: #94a3b8;
+  font-size: 11px;
+}

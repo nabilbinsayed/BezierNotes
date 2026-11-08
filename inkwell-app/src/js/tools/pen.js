@@ -8,6 +8,7 @@ import { state, warnDurability, emit } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
+import { latency, recordDraw } from '../dev/latency.js';
 
 // ---- Incremental wet-stroke geometry -------------------------------------
 // Freezing the completed prefix of a long stroke into Path2D chunks means each
@@ -376,6 +377,17 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport, shouldRender = true,
 }
 
 export function renderActiveWetStroke(pane, viewport, rawEvent = null) {
+  // Plan 094: the only cost of latency instrumentation when it is off.
+  if (!latency.enabled) {
+    drawActiveWetStroke(pane, viewport, rawEvent);
+    return;
+  }
+  const drawStart = performance.now();
+  drawActiveWetStroke(pane, viewport, rawEvent);
+  recordDraw(rawEvent, drawStart);
+}
+
+function drawActiveWetStroke(pane, viewport, rawEvent) {
   const { wctx } = compositor.getContexts();
   if (!wctx || !state.cur || !viewport) return;
 

@@ -7,6 +7,7 @@ import { state, $, on, emit } from './core/state.js';
 import * as commandsModule from './core/commands.js';
 import * as documentOps from './core/document.js';
 import * as ipc from './core/ipc.js';
+import * as latencyModule from './dev/latency.js';
 import * as compositor from './render/compositor.js';
 import * as tiles from './render/tiles.js';
 import * as overlays from './render/overlays.js';
@@ -399,6 +400,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Global compatibility bridges
   window.state = state;
+  // Plan 094: synthetic stylus replay and latency numbers, for test_latency.py
+  // and for measuring by hand from the devtools console.
+  window.__bezierReplay = async (capture, opts) => (await import('./dev/replay.js')).replay(capture, opts);
+  window.__bezierLatency = latencyModule;
   window.commands = commandsModule.commands;
   window.toolManager = toolManager;
   window.documentOps = Object.assign({}, documentOps, {

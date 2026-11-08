@@ -29,6 +29,7 @@ import { openInsertPageModal } from '../ui/insert-page-modal.js';
 import { cycleReadingMode } from '../ui/reading-mode.js';
 import { hideExternalChangeBanner } from '../ui/external-change.js';
 import { noteFlushed } from './autosave.js';
+import { toggleLatencyHud } from '../dev/hud.js';
 
 // A manual Ctrl+S may overlap an autosave; the backend orders them.
 let _savesInFlight = 0;
@@ -410,6 +411,14 @@ export function registerCoreCommands() {
     category: 'View',
     shortcut: 'F11',
     execute: () => toolbar.toggleFullscreen(),
+  });
+
+  reg.register({
+    id: 'view.latencyHud',
+    title: 'Ink Latency HUD',
+    category: 'View',
+    shortcut: 'Ctrl+Shift+L',
+    execute: () => toggleLatencyHud(),
   });
 
   reg.register({

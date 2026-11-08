@@ -28,7 +28,7 @@ Read this before making changes to the InkWell codebase.
 
 | Scope / Target | Command | Expected Outcome |
 |---|---|---|
-| Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, all 173 checks pass |
+| Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, all 175 checks pass |
 | Rust Workspace Tests | `cd inkwell; cargo test --workspace -- --test-threads=1` | exit 0, all 153 tests pass (incl. Plan 087 conformance, golden, round-trip property and render-diff suites, Plan 091 `sync_meta` with the pre-091 fixtures in `inkwell/fixtures/v1/`, and Plan 092 `merge_prop`: CRDT laws and two-device file merges) |
 | Rust Clippy | `cd inkwell; cargo clippy --all-targets` | zero warnings |
 | App Crate Tests & Clippy | `cargo test -p inkwell-app; cargo clippy -p inkwell-app --all-targets -- -D warnings` (repo root) | 24 tests pass; zero warnings |
@@ -36,6 +36,7 @@ Read this before making changes to the InkWell codebase.
 | Golden Snapshots | `cd inkwell; cargo test -p inkwell-core --test golden` | exit 0; after an intentional format change run with `UPDATE_GOLDEN=1` and review the diff |
 | Crash Torture | `scripts/torture_save.sh 200` | `0 failures` (no unopenable file, and no orphaned save temp survives the sweep) |
 | Focused Regression Suites | `cd inkwell-app; for t in test_lasso_selection test_insert_page_dialog test_palette_dismissal test_resize_no_black_hole test_viewport_and_pressure; do py -3 $t.py; done` | each exits 0. The other standalone `test_*.py` scripts have known failing checks, listed in `plans/093-…`; they are not run in CI |
+| Ink Latency Gate | `cd inkwell-app; py -3 test_latency.py --self-test; py -3 test_latency.py` | self-test catches an injected 10 ms stall; gate passes against `perf/baseline.json` (re-record with `--update-baseline` only deliberately). See `docs/latency.md` |
 | Merge CLI | `cd inkwell; cargo run -p inkwell-core --bin beziernotes -- merge a.pdf b.pdf -o out.pdf` | merges two copies of one notebook; refuses copies of different PDFs (exit 1) |
 | Module Boundaries | `node tools/lint_boundaries.js` | zero violations |
 | M0 Prototype Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass (prototype only) |

@@ -201,6 +201,25 @@ jobs:
           python test_resize_no_black_hole.py
           python test_viewport_and_pressure.py
 
+      - name: Ink Latency Gate (Plan 094)
+        # Replays recorded and synthetic pen input through the real pointer
+        # router and fails if p99 input->draw or draw cost regressed against
+        # perf/baseline.json (budgets scale with runner speed), or any ink
+        # handler stalled > 50 ms. The self-test injects a 10 ms stall into the
+        # wet draw and must be caught.
+        working-directory: inkwell-app
+        run: |
+          python test_latency.py --self-test
+          python test_latency.py
+
+      - name: Upload Latency Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latency-linux
+          path: target/latency.json
+          if-no-files-found: ignore
+
       - name: Build Linux App (AppImage & DEB)
         working-directory: inkwell-app
         run: |

@@ -1,0 +1,55 @@
+{
+  "calibration_ms": 132.40000000596046,
+  "scenarios": {
+    "capture": {
+      "samples": 11901,
+      "draws": 11839,
+      "p50_input_to_draw_ms": 0.20000001788139343,
+      "p99_input_to_draw_ms": 1.4000000059604645,
+      "p99_input_to_present_ms": 62.900000005960464,
+      "p99_draw_cost_ms": 1.100000023841858,
+      "p99_frame_ms": 50.10000000000582,
+      "long_tasks": 2,
+      "long_tasks_while_inking": 2,
+      "max_input_to_draw_ms": 109.59999999403954,
+      "long_task_max_ms": 192,
+      "long_tasks_observed": true,
+      "pan_frames": 0
+    },
+    "scribble": {
+      "samples": 700,
+      "draws": 700,
+      "p50_input_to_draw_ms": 0.30000001192092896,
+      "p99_input_to_draw_ms": 1.600000023841858,
+      "p99_input_to_present_ms": 53,
+      "p99_draw_cost_ms": 1.300000011920929,
+      "p99_frame_ms": 50.10000000000582,
+      "long_tasks": 0,
+      "long_tasks_while_inking": 0,
+      "max_input_to_draw_ms": 8.900000005960464,
+      "long_task_max_ms": 0,
+      "long_tasks_observed": true,
+      "pan_frames": 0
+    },
+    "heavy": {
+      "samples": 700,
+      "draws": 699,
+      "p50_input_to_draw_ms": 0.10000002384185791,
+      "p99_input_to_draw_ms": 7,
+      "p99_input_to_present_ms": 113.59999999403954,
+      "p99_draw_cost_ms": 6.699999988079071,
+      "p99_frame_ms": 200.09999999999854,
+      "long_tasks": 2,
+      "long_tasks_while_inking": 1,
+      "max_input_to_draw_ms": 9,
+      "long_task_max_ms": 190,
+      "long_tasks_observed": true,
+      "pan_frames": 154
+    }
+  },
+  "known": {
+    "heavy": {
+      "draw_cost_cap": "p99 wet draw is 5-9 ms when drawing while the page pans: the pan changes the wet layer's key on every sample, so the whole stroke so far is re-rasterised per sample (pen.js drawActiveWetStroke). Fix: shift the layer on translation-only changes"
+    }
+  }
+}

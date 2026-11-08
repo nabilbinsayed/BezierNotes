@@ -1,4 +1,5 @@
 import { state, emit } from '../core/state.js';
+import { latency, recordNative } from '../dev/latency.js';
 import * as ipc from '../core/ipc.js';
 
 export const TOOL_NAMES = [
@@ -64,6 +65,7 @@ export function initStylusIntegration() {
       liveNativeDown = !!s.down;
       liveNativeTool = s.tool === 2 ? 'eraser' : 'pen';
       lastNativeSampleTime = performance.now();
+      if (latency.enabled) recordNative(s.kernel_to_emit_us);
     }
   });
 }

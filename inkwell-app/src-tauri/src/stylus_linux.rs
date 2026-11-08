@@ -111,6 +111,13 @@ const BTN_STYLUS2: u16 = 0x14c;
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeStylusSample {
     pub timestamp_us: u64,
+    /// The evdev SYN_REPORT's own timestamp (CLOCK_MONOTONIC, set with
+    /// EVIOCSCLOCKID), so the latency HUD can split kernel → app from
+    /// app → screen (Plan 094).
+    pub event_us: u64,
+    /// `timestamp_us - event_us`: evdev event to IPC emit. 0 when the device
+    /// clock isn't monotonic (the ioctl failed) and the two can't be compared.
+    pub kernel_to_emit_us: u64,
     pub pressure: f32,
     pub x: i32,
     pub y: i32,
@@ -432,9 +439,16 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
 
                                     if down_changed || tool_changed || pressure_changed || heartbeat_needed {
                                         let ts_us = get_kernel_monotonic_us();
+                                        let event_us = ev.tv_sec.saturating_mul(1_000_000).saturating_add(ev.tv_usec);
+                                        let kernel_to_emit_us = ts_us
+                                            .checked_sub(event_us)
+                                            .filter(|d| *d < 10_000_000)
+                                            .unwrap_or(0);
 
                                         let sample = NativeStylusSample {
                                             timestamp_us: ts_us,
+                                            event_us,
+                                            kernel_to_emit_us,
                                             pressure: norm_p,
                                             x: cur_x,
                                             y: cur_y,

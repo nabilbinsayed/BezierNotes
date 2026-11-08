@@ -66,6 +66,7 @@ To achieve universal compatibility without sacrificing lossless digital editing,
 ## ✨ Core Highlights & Capabilities
 
 ### 🖋️ Ultra-Low Latency Inking Engine
+- **Measured, Not Claimed:** An in-app latency HUD (`Ctrl+Shift+L`) and a CI gate that replays real pen input and fails on regressions. Device latency numbers are published only after a 240 fps camera measurement: see [docs/latency.md](docs/latency.md).
 - **Dual-Canvas Wet/Dry Pipeline:** Instantaneous stylus feedback rendered on an isolated "wet" canvas without triggering DOM reflows or full-scene redraws, baked into the vector "dry" canvas upon pen lift.
 - **Sub-Pixel Analogue Pressure:** High-density sampling with exponential moving average (EMA) pressure curves, user-configurable gamma response, and One-Euro temporal filtering to suppress jitter while tracking rapid handwriting.
 - **$C^1$ Continuous Bézier Ribbons:** Centripetal Catmull-Rom splines generate smooth cubic Bézier ribbon outlines, eliminating the faceted, polygonal appearance of naive digital pens at high magnifications.

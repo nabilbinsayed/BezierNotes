@@ -3250,6 +3250,33 @@ with sync_playwright() as pw:
     check("merging a different document is refused with a message", m["refused"], f"res={m}")
 
     # -------------------------------------------------------------
+    # T32: Latency HUD and replay (Plan 094)
+    # -------------------------------------------------------------
+    print("\n=== T32 Latency HUD & Replay ===", flush=True)
+    pg.evaluate("document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden')); window.toolManager.setTool('pen')")
+    pg.locator("#wet").focus() if pg.locator("#wet").count() else None
+    pg.keyboard.press("Control+Shift+L")
+    pg.wait_for_timeout(100)
+    hud_on = pg.evaluate("""(() => ({
+      shown: !!document.getElementById('latencyHud') && !document.getElementById('latencyHud').classList.contains('hidden'),
+      enabled: window.__bezierLatency.latency.enabled,
+    }))()""")
+    rep = pg.evaluate("""(async () => {
+      const before = window.state.strokes.length;
+      const s = await window.__bezierReplay({ strokes: [{ samples: Array.from({ length: 40 }, (_, i) => [i * 4, 100 + Math.sin(i / 4) * 20, 0.5, i * 4]) }] }, { speed: 4 });
+      return { drawn: s.inputToDraw.count, committed: window.state.strokes.length - before, p99: s.inputToDraw.p99 };
+    })()""")
+    pg.keyboard.press("Control+Shift+L")
+    pg.wait_for_timeout(100)
+    hud_off = pg.evaluate("""({ hidden: document.getElementById('latencyHud').classList.contains('hidden'),
+      enabled: window.__bezierLatency.latency.enabled })""")
+    check("Ctrl+Shift+L shows the latency HUD and turns instrumentation on, and off again",
+          hud_on["shown"] and hud_on["enabled"] and hud_off["hidden"] and not hud_off["enabled"], f"on={hud_on} off={hud_off}")
+    check("replayed pen input is drawn through the real router and measured",
+          rep["drawn"] >= 30 and rep["committed"] == 1 and rep["p99"] is not None, f"res={rep}")
+    pg.evaluate("window.documentOps.performUndo(); window.state.isDirty = false")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)
