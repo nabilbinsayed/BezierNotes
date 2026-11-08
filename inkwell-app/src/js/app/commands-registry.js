@@ -415,6 +415,13 @@ export function registerCoreCommands() {
   });
 
   reg.register({
+    id: 'page.addCanvas',
+    title: 'Add Canvas Page (Infinite)',
+    category: 'Pages',
+    execute: async () => (await import('./ui-bindings.js')).addCanvasPage(),
+  });
+
+  reg.register({
     id: 'view.latencyHud',
     title: 'Ink Latency HUD',
     category: 'View',

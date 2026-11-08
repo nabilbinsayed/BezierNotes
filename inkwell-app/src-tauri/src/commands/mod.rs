@@ -214,6 +214,42 @@ pub struct PageInfo {
     pub height_pt: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    /// An infinite canvas sheet (Plan 097): no PDF page behind it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub canvas: bool,
+}
+
+/// The page a canvas sheet is shown as: its content plus room to keep
+/// drawing, in whole A4 tiles (the frontend grows it further as you draw).
+pub(crate) fn canvas_page_info(index: usize, sheet: &inkwell_core::doc::Sheet) -> PageInfo {
+    let (tw, th) = inkwell_core::pdf::CANVAS_TILE;
+    let b = inkwell_core::pdf::canvas_bounds(sheet).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+    PageInfo {
+        page_index: index,
+        width_pt: (((b[2].max(0.0) + tw * 0.5) / tw).ceil() * tw).max(tw),
+        height_pt: (((b[3].max(0.0) + th * 0.5) / th).ceil() * th).max(th),
+        template: sheet.template.clone().or(Some("dot".into())),
+        canvas: true,
+    }
+}
+
+/// Drop canvas tile pages (Plan 097; always after the document's own pages).
+pub(crate) fn drop_canvas_tiles(bytes: &[u8], page_infos: &mut Vec<PageInfo>) {
+    if let Ok(f) = PdfFile::open(bytes.to_vec()) {
+        let real = f.real_page_count();
+        if real < page_infos.len() {
+            page_infos.truncate(real);
+        }
+    }
+}
+
+/// One page per canvas sheet, after the PDF's own pages.
+pub(crate) fn append_canvas_pages(doc: &Document, page_infos: &mut Vec<PageInfo>) {
+    for (i, sheet) in doc.sheets.iter().enumerate() {
+        if sheet.kind == inkwell_core::SheetKind::FreeCanvas {
+            page_infos.push(canvas_page_info(i, sheet));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,7 +420,7 @@ fn extract_pdf_meta(
                             .page_size(i as i32)
                             .map(|r| (r.width().value as f64, r.height().value as f64))
                             .unwrap_or((595.0, 842.0));
-                        PageInfo { page_index: i, width_pt: w, height_pt: h, template: None }
+                        PageInfo { page_index: i, width_pt: w, height_pt: h, template: None, canvas: false }
                     })
                     .collect();
                 let outline = inkwell_pdf::extract_outline(&doc);
@@ -403,7 +439,7 @@ fn extract_pdf_meta(
         .map(|f| f.page_count())
         .unwrap_or(1);
     let page_infos = (0..n)
-        .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0, template: None })
+        .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0, template: None, canvas: false })
         .collect();
     (page_infos, Vec::new())
 }

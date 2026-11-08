@@ -30,7 +30,7 @@ import * as presentation from './ui/presentation.js';
 import { preloadNoteFonts } from './core/note-font.js';
 import { registerCoreCommands } from './app/commands-registry.js';
 import { createNewWhiteboard, friendlyError, handlePdfLoadResult, hideOpenProgress, showOpenProgress } from './app/document-loading.js';
-import { bindAllUIEvents } from './app/ui-bindings.js';
+import { bindAllUIEvents, growCanvasForBounds } from './app/ui-bindings.js';
 import { attachKeyboardShortcuts } from './input/keyboard.js';
 import { attachPointerHandlers } from './input/pointer-router.js';
 import { exportPdfWithDialog, exportWithSelectedOptions, parsePageRangeSpec } from './ui/export-modal.js';
@@ -190,6 +190,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!evt) return;
     const type = evt.type;
     const data = evt.payload || {};
+
+    if ((type === 'add_stroke' || type === 'redo_add_stroke') && data.stroke) {
+      const s = data.stroke;
+      if (!s.bbox && window.Ink && window.Ink.computeStrokeBbox) s.bbox = window.Ink.computeStrokeBbox(s.points || [], s.base_width);
+      growCanvasForBounds(s.sheet || 0, s.bbox);
+    }
 
     if (type === 'undo_form_value' || type === 'redo_form_value') {
       forms.applyValue(data.name, data.value, 'form_value_sync');

@@ -463,11 +463,16 @@ export function bindAllUIEvents() {
     closeInsertPageModal();
     try {
       const curSheet = getViewport() ? getViewport().getActivePageInView(state.drawingPane || 'left') : 0;
-      const totalPages = state.pageInfos ? state.pageInfos.length : 0;
+      // canvas pages (Plan 097) always come last: PDF pages go before them
+      const totalPages = state.pageInfos ? state.pageInfos.filter(p => !p.canvas).length : 0;
       const curPageInfo = (state.pageInfos && state.pageInfos[curSheet]) || { width_pt: 595.0, height_pt: 842.0 };
 
       // 1. Resolve base width and height in points
       const sizePreset = $('insertPaperSizeSelect') ? $('insertPaperSizeSelect').value : 'match_current';
+      if (sizePreset === 'canvas') {
+        await addCanvasPage();
+        return;
+      }
       let width = 595.0;
       let height = 842.0;
 
@@ -521,6 +526,8 @@ export function bindAllUIEvents() {
       } else if (posChoice === 'document_end') {
         targetIndex = totalPages;
       }
+
+      targetIndex = Math.min(targetIndex, totalPages);
 
       // 5. Execute insertion
       await ipc.insertBlankPage(targetIndex, width, height);
@@ -765,4 +772,43 @@ export function bindAllUIEvents() {
   // Modal focus trapping and backdrop dismissal
   initModalFocusTrap();
   initLassoSelectionPopover();
+}
+
+/** Append an infinite canvas page (Plan 097) and go to it. */
+export async function addCanvasPage() {
+  try {
+    const info = await ipc.addCanvasPage();
+    if (!info) return null;
+    const index = (state.pageInfos || []).length;
+    documentOps.insertPageAtIndex(index, { ...info, page_index: index }, { recordHistory: false });
+    if (getViewport()) getViewport().updateDocumentLayout(state.pageInfos);
+    navigation.goToPage(index, 'left', getViewport());
+    drawers.renderThumbnails();
+    compositor.redrawAll();
+    toast.showToast('Added a canvas page: it grows as you draw near its edges, and saves as ordinary pages any PDF reader shows.', 'success');
+    return info;
+  } catch (err) {
+    const msg = friendlyError(err);
+    if (msg) toast.showToast('Failed to add a canvas page: ' + msg, 'error');
+    return null;
+  }
+}
+
+/**
+ * Grow a canvas page by a tile when ink comes within a margin of its right or
+ * bottom edge, so there is always room to keep drawing.
+ */
+export function growCanvasForBounds(sheet, bbox) {
+  const pi = state.pageInfos && state.pageInfos[sheet];
+  if (!pi || !pi.canvas || !bbox) return false;
+  const margin = 200;
+  let grew = false;
+  while (bbox[2] > pi.width_pt - margin) { pi.width_pt += 595; grew = true; }
+  while (bbox[3] > pi.height_pt - margin) { pi.height_pt += 842; grew = true; }
+  if (grew && getViewport()) {
+    getViewport().updateDocumentLayout(state.pageInfos);
+    compositor.scheduleRedrawTiles();
+    compositor.scheduleRedrawAll();
+  }
+  return grew;
 }

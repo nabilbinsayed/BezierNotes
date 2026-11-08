@@ -58,6 +58,7 @@ fn replay_wal_journal(
                             width_pt,
                             height_pt,
                             template: None,
+                            canvas: false,
                         });
                         for (i, p) in page_infos.iter_mut().enumerate() {
                             p.page_index = i;
@@ -197,6 +198,14 @@ fn replay_wal_journal(
                     WalEntry::FieldValue { name, value } => {
                         doc.form_values.insert(name, value);
                     }
+                    WalEntry::CanvasAdded => {
+                        doc.sheets.push(inkwell_core::doc::Sheet::canvas());
+                    }
+                    WalEntry::CanvasRemoved { index } => {
+                        if doc.sheets.get(index).is_some_and(|s| s.kind == inkwell_core::SheetKind::FreeCanvas) {
+                            doc.sheets.remove(index);
+                        }
+                    }
                 }
             }
         }
@@ -269,14 +278,20 @@ pub async fn open_pdf(
 
     let arc_bytes = Arc::new(bytes);
     let (mut page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
+    // Canvas tile pages (Plan 097) are regenerated on save, not pages of the
+    // document: drop them before matching sheets to pages.
+    drop_canvas_tiles(&arc_bytes, &mut page_infos);
     let n_pages = page_infos.len();
 
     let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
         Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
             eprintln!("[inkwell] Loaded sidecar with {} strokes from {:?}", d.stroke_count(), path);
             let mut d = d;
-            while d.sheets.len() < n_pages {
-                d.sheets.push(inkwell_core::doc::Sheet::bounded(d.sheets.len()));
+            // pad PDF-backed sheets, keeping canvas sheets last
+            let mut pdf_sheets = d.sheets.iter().filter(|s| s.kind != inkwell_core::SheetKind::FreeCanvas).count();
+            while pdf_sheets < n_pages {
+                d.sheets.insert(pdf_sheets, inkwell_core::doc::Sheet::bounded(pdf_sheets));
+                pdf_sheets += 1;
             }
             d
         }
@@ -322,6 +337,8 @@ pub async fn open_pdf(
         }
     }
 
+    // one page per canvas sheet, after the PDF's pages
+    append_canvas_pages(&doc, &mut page_infos);
     let loaded_strokes = extract_frontend_strokes(&doc);
     let loaded_shapes: Vec<inkwell_core::shape::ShapeObject> = doc.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect();
     let doc_bookmarks = doc.bookmarks.clone();
@@ -437,14 +454,20 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
 
     let arc_bytes = Arc::new(bytes);
     let (mut page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
+    // Canvas tile pages (Plan 097) are regenerated on save, not pages of the
+    // document: drop them before matching sheets to pages.
+    drop_canvas_tiles(&arc_bytes, &mut page_infos);
     let n_pages = page_infos.len();
 
     let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
         Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
             eprintln!("[inkwell] Loaded sidecar with {} strokes from bytes ({})", d.stroke_count(), name);
             let mut d = d;
-            while d.sheets.len() < n_pages {
-                d.sheets.push(inkwell_core::doc::Sheet::bounded(d.sheets.len()));
+            // pad PDF-backed sheets, keeping canvas sheets last
+            let mut pdf_sheets = d.sheets.iter().filter(|s| s.kind != inkwell_core::SheetKind::FreeCanvas).count();
+            while pdf_sheets < n_pages {
+                d.sheets.insert(pdf_sheets, inkwell_core::doc::Sheet::bounded(pdf_sheets));
+                pdf_sheets += 1;
             }
             d
         }
@@ -489,6 +512,8 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         }
     }
 
+    // one page per canvas sheet, after the PDF's pages
+    append_canvas_pages(&doc, &mut page_infos);
     let loaded_strokes = extract_frontend_strokes(&doc);
     let loaded_shapes: Vec<inkwell_core::shape::ShapeObject> = doc.sheets.iter().flat_map(|s| s.shapes.iter().cloned()).collect();
     let doc_bookmarks = doc.bookmarks.clone();

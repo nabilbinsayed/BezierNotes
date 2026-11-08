@@ -146,6 +146,7 @@ fn main() {
             commands::merge::find_conflict_siblings,
             commands::ink::journal_shape_mutation,
             commands::forms::get_form_fields,
+            commands::pages::add_canvas_page,
             commands::forms::set_form_value,
             commands::merge::preview_merge,
             commands::merge::apply_merge,

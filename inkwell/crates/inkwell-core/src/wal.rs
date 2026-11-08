@@ -40,6 +40,8 @@ const KIND_TEXT_REMOVE: u8 = 11;
 const KIND_SHAPE_UPSERT: u8 = 12;
 const KIND_SHAPE_REMOVE: u8 = 13;
 const KIND_FIELD_VALUE: u8 = 14;
+const KIND_CANVAS_ADDED: u8 = 15;
+const KIND_CANVAS_REMOVED: u8 = 16;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WalEntry {
@@ -103,6 +105,12 @@ pub enum WalEntry {
     FieldValue {
         name: String,
         value: String,
+    },
+    /// Plan 097: an infinite canvas sheet appended.
+    CanvasAdded,
+    /// Plan 097: the canvas sheet at `index` removed.
+    CanvasRemoved {
+        index: usize,
     },
 }
 
@@ -220,7 +228,9 @@ impl Wal {
             | WalEntry::TextRemoved { .. }
             | WalEntry::ShapeUpsert { .. }
             | WalEntry::ShapeRemoved { .. }
-            | WalEntry::FieldValue { .. } => {
+            | WalEntry::FieldValue { .. }
+            | WalEntry::CanvasAdded
+            | WalEntry::CanvasRemoved { .. } => {
                 let kind = match entry {
                     WalEntry::ImageAdded { .. } => KIND_IMAGE_ADD,
                     WalEntry::ImageRemoved { .. } => KIND_IMAGE_REMOVE,
@@ -229,6 +239,8 @@ impl Wal {
                     WalEntry::ShapeUpsert { .. } => KIND_SHAPE_UPSERT,
                     WalEntry::ShapeRemoved { .. } => KIND_SHAPE_REMOVE,
                     WalEntry::FieldValue { .. } => KIND_FIELD_VALUE,
+                    WalEntry::CanvasAdded => KIND_CANVAS_ADDED,
+                    WalEntry::CanvasRemoved { .. } => KIND_CANVAS_REMOVED,
                     _ => unreachable!(),
                 };
                 let json_bytes = serde_json::to_vec(entry).unwrap_or_default();
@@ -326,7 +338,9 @@ impl Wal {
                 }
                 KIND_IMAGE_ADD | KIND_IMAGE_REMOVE | KIND_TEXT_UPSERT | KIND_TEXT_REMOVE | KIND_SHAPE_UPSERT
                 | KIND_SHAPE_REMOVE
-                | KIND_FIELD_VALUE => {
+                | KIND_FIELD_VALUE
+                | KIND_CANVAS_ADDED
+                | KIND_CANVAS_REMOVED => {
                     if let Ok(entry) = serde_json::from_slice::<WalEntry>(payload) {
                         out.push(entry);
                     }

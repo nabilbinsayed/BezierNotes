@@ -9,6 +9,8 @@ import * as compositor from '../render/compositor.js';
 
 export async function ensurePageTextData(sheet) {
   if (sheet == null || sheet < 0) return null;
+  // canvas pages (Plan 097) have no PDF text
+  if (state.pageInfos && state.pageInfos[sheet] && state.pageInfos[sheet].canvas) return null;
   if (state.pageTextData && state.pageTextData[sheet]) return state.pageTextData[sheet];
   if (state.pageTextLoading && state.pageTextLoading[sheet]) {
     return state.pageTextLoading[sheet];

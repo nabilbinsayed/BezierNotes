@@ -259,6 +259,7 @@ function scheduleAdjacentPrefetch() {
     }
     for (const target of targets) {
       if (target < current - 1 || target > current + 2) continue;
+      if (pageInfos[target] && pageInfos[target].canvas) continue;
       const key = `${target}:${px}`;
       if (now - (_prefetchedAt.get(key) || 0) < 8000) continue;
       _prefetchedAt.set(key, now);

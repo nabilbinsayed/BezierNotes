@@ -182,7 +182,7 @@ export function blitTileBitmap(ctx, data, tr, pl, pane, viewport) {
  */
 export function drawTileData(ctx, data, tr, pl, pane, pi, viewport, dpr, clipPaneFn) {
   if (!ctx || !data || !viewport || !pl) return;
-  if (pi && pi.template === 'dark') return;
+  if (pi && (pi.template === 'dark' || pi.canvas)) return;
 
   const [pageX0, pageY0] = viewport.worldToScreen(pl.x, pl.y, pane);
   const [pageX1, pageY1] = viewport.worldToScreen(
@@ -209,7 +209,8 @@ export function drawTileData(ctx, data, tr, pl, pane, pi, viewport, dpr, clipPan
  */
 export function redrawTilesForPage(ctx, pane, pi, pl, viewport, dpr, bounds, clipPaneFn, isCurrentEpoch = () => true, missingOut = null) {
   if (!ctx || !viewport || !pl || !pi) return;
-  if (pi.template === 'dark') return;
+  // dark paper and canvas pages (Plan 097) have no PDF page to render
+  if (pi.template === 'dark' || pi.canvas) return;
 
   const [wx0, wy0] = viewport.screenToWorld(bounds.x, bounds.y, pane);
   const [wx1, wy1] = viewport.screenToWorld(bounds.x + bounds.width, bounds.y + bounds.height, pane);

@@ -2,6 +2,41 @@
 
 use super::*;
 
+/// Sheets backed by PDF pages. Canvas sheets (Plan 097) always come after
+/// them, so PDF page operations stay within `0..pdf_sheets`.
+fn pdf_sheet_count(state: &AppState) -> usize {
+    state.doc.lock().unwrap().as_ref().map_or(0, |d| {
+        d.sheets.iter().filter(|s| s.kind != inkwell_core::SheetKind::FreeCanvas).count()
+    })
+}
+
+fn refuse_canvas(state: &AppState, index: usize, what: &str) -> Result<(), String> {
+    if index >= pdf_sheet_count(state) {
+        return Err(format!("Canvas pages can't be {what}; they always come after the document's pages."));
+    }
+    Ok(())
+}
+
+/// Append an infinite canvas page (Plan 097). Its content is tiled into
+/// ordinary pages when the document is saved.
+#[tauri::command]
+pub async fn add_canvas_page(seq: Option<u64>, state: State<'_, AppState>) -> Result<PageInfo, String> {
+    let seq = journal_seq(state.inner(), seq);
+    let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
+    let info = {
+        let mut g = state.doc.lock().unwrap();
+        let doc = g.as_mut().ok_or("No document open")?;
+        doc.sheets.push(inkwell_core::doc::Sheet::canvas());
+        let i = doc.sheets.len() - 1;
+        canvas_page_info(i, &doc.sheets[i])
+    };
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::CanvasAdded, seq));
+    }
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(info)
+}
+
 #[tauri::command]
 pub async fn insert_blank_page(
     index: usize,
@@ -11,6 +46,9 @@ pub async fn insert_blank_page(
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
     let seq = journal_seq(state.inner(), seq);
+    if index > pdf_sheet_count(state.inner()) {
+        return Err("New pages go before the canvas pages; canvas pages always come last.".to_string());
+    }
     // Page edits rewrite the base bytes; never interleave with a save's
     // snapshot -> write -> publish (Plan 090).
     let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -70,6 +108,7 @@ pub async fn insert_blank_page(
         width_pt,
         height_pt,
         template: None,
+        canvas: false,
     })
 }
 
@@ -84,10 +123,19 @@ pub async fn delete_page(
     // snapshot -> write -> publish (Plan 090).
     let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
     {
-        let doc_guard = state.doc.lock().unwrap();
-        let doc = doc_guard.as_ref().ok_or("No document open")?;
+        let mut doc_guard = state.doc.lock().unwrap();
+        let doc = doc_guard.as_mut().ok_or("No document open")?;
         if doc.sheets.len() <= 1 || index >= doc.sheets.len() {
             return Err(format!("Cannot delete page {index} (page out of bounds or only remaining page)"));
+        }
+        // A canvas page has no PDF page behind it: drop the sheet only.
+        if doc.sheets[index].kind == inkwell_core::SheetKind::FreeCanvas {
+            doc.sheets.remove(index);
+            if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+                let _ = tx.send(WalOp::Append(WalEntry::CanvasRemoved { index }, seq));
+            }
+            state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(true);
         }
     }
 
@@ -158,6 +206,7 @@ pub async fn duplicate_page(
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
     let seq = journal_seq(state.inner(), seq);
+    refuse_canvas(state.inner(), index, "duplicated")?;
     // Page edits rewrite the base bytes; never interleave with a save's
     // snapshot -> write -> publish (Plan 090).
     let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -263,6 +312,7 @@ pub async fn duplicate_page(
         width_pt: out_w,
         height_pt: out_h,
         template: cloned_template,
+        canvas: false,
     })
 }
 
@@ -274,6 +324,7 @@ pub async fn rotate_page(
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
     let seq = journal_seq(state.inner(), seq);
+    refuse_canvas(state.inner(), index, "rotated")?;
     // Page edits rewrite the base bytes; never interleave with a save's
     // snapshot -> write -> publish (Plan 090).
     let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -384,6 +435,7 @@ pub async fn rotate_page(
         width_pt: out_w,
         height_pt: out_h,
         template: rot_template,
+        canvas: false,
     })
 }
 
@@ -395,6 +447,7 @@ pub async fn reorder_page(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let seq = journal_seq(state.inner(), seq);
+    refuse_canvas(state.inner(), from_index.max(to_index), "moved")?;
     // Page edits rewrite the base bytes; never interleave with a save's
     // snapshot -> write -> publish (Plan 090).
     let _save_guard = state.save_lock.lock().map_err(|e| format!("Lock error: {e}"))?;

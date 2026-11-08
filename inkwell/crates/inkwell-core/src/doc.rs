@@ -104,6 +104,21 @@ impl Sheet {
             order_key: String::new(),
         }
     }
+    /// An infinite canvas sheet (Plan 097): no PDF page behind it; its
+    /// content is tiled into pages on save (`pdf::CANVAS_TILE`).
+    pub fn canvas() -> Self {
+        Self {
+            kind: SheetKind::FreeCanvas,
+            layers: vec![Layer::new("Ink")],
+            images: Vec::new(),
+            text_objects: Vec::new(),
+            template: Some("dot".into()),
+            shapes: Vec::new(),
+            page_id: 0,
+            order_key: String::new(),
+        }
+    }
+
     pub fn blank() -> Self {
         Self {
             kind: SheetKind::BoundedPage { source_pdf_page: usize::MAX },

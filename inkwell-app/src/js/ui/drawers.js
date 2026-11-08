@@ -484,8 +484,8 @@ export async function drawThumbnailCanvas(canvas, idx, pi) {
     ctx.restore();
   }
 
-  // Real PDF page content (if not dark template)
-  if (!isDark) {
+  // Real PDF page content (not for dark paper or canvas pages)
+  if (!isDark && !pi.canvas) {
     try {
       const baseSpan = (pw <= 512 && ph <= 512) ? 512 : Math.max(pw, ph);
       const px = Math.round((thumbW / pw) * baseSpan);   // backend output width = pw*px/baseSpan = thumbW

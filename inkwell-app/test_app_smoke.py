@@ -3505,6 +3505,68 @@ with sync_playwright() as pw:
           f["clearedAfterSave"] and f["followsZoom"], f"res={f}")
 
     # -------------------------------------------------------------
+    # T35: Infinite canvas pages (Plan 097)
+    # -------------------------------------------------------------
+    print("\n=== T35 Canvas Pages ===", flush=True)
+    canvas_res = pg.evaluate("""(async () => {
+      const stub = window.__inkwell_stub;
+      const out = {};
+      const tileReqs = [], textReqs = [], inserts = [];
+      const realTile = stub.render_tile;
+      stub.render_tile = async (a) => { tileReqs.push(a.pageIndex ?? a.page_index ?? a.page); return realTile(a); };
+      stub.get_page_text_data_orig = stub.get_page_text_data;
+      stub.get_page_text_data = async (a) => { textReqs.push(a.pageIndex); return stub.get_page_text_data_orig(a); };
+      stub.add_canvas_page = async () => ({ page_index: 0, width_pt: 595, height_pt: 842, template: 'dot', canvas: true });
+      stub.insert_blank_page = async (a) => { inserts.push(a); return { page_index: a.index, width_pt: a.widthPt, height_pt: a.heightPt }; };
+      window.documentOps.setDocument({ pageInfos: [{ page_index: 0, width_pt: 595, height_pt: 842 }, { page_index: 1, width_pt: 595, height_pt: 842 }],
+        strokes: [], images: [], textObjects: [], bookmarks: [] });
+      const { getViewport } = await import('./js/app/viewport-ref.js');
+      getViewport().updateDocumentLayout(window.state.pageInfos);
+
+      await window.commands.execute('page.addCanvas');
+      const pis = window.state.pageInfos;
+      out.added = pis.length === 3 && pis[2].canvas === true && pis[2].template === 'dot';
+
+      // no PDF tiles or text for the canvas page
+      tileReqs.length = 0;
+      const comp = await import('./js/render/compositor.js');
+      comp.redrawTiles();
+      await new Promise(r => setTimeout(r, 300));
+      out.noCanvasTiles = !tileReqs.includes(2);
+      const ts = await import('./js/workspace/text-selection.js');
+      out.noCanvasText = (await ts.ensurePageTextData(2)) === null && !textReqs.includes(2);
+
+      // ink near the right/bottom edge grows the canvas
+      const w0 = pis[2].width_pt, h0 = pis[2].height_pt;
+      window.documentOps.addStroke({ id: 'cv1', kind: 'pen', rgb: [0, 0, 0], base_width: 2, sheet: 2,
+        points: [{ x: 500, y: 760, p: 0.5 }, { x: 560, y: 800, p: 0.5 }] }, { recordHistory: true });
+      out.grew = pis[2].width_pt > w0 && pis[2].height_pt > h0;
+
+      // a PDF page added "at the end" goes before the canvas
+      const modal = document.getElementById('insertPageModal');
+      document.getElementById('insertPaperSizeSelect').value = 'a4';
+      document.getElementById('insertPositionSelect').value = 'document_end';
+      document.getElementById('insertPageForm').dispatchEvent(new Event('submit', { cancelable: true }));
+      await new Promise(r => setTimeout(r, 100));
+      out.insertBeforeCanvas = inserts.length === 1 && inserts[0].index === 2 && window.state.pageInfos[3].canvas === true;
+      out.canvasOption = !!document.querySelector('#insertPaperSizeSelect option[value="canvas"]');
+
+      stub.render_tile = realTile;
+      stub.get_page_text_data = stub.get_page_text_data_orig;
+      window.documentOps.setDocument({ pageInfos: [{ page_index: 0, width_pt: 595, height_pt: 842 }, { page_index: 1, width_pt: 595, height_pt: 842 }],
+        strokes: [], images: [], textObjects: [], bookmarks: [] });
+      getViewport().updateDocumentLayout(window.state.pageInfos);
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    c = canvas_res
+    check("Add Canvas Page appends a dotted canvas page after the document's pages", c["added"] and c["canvasOption"], f"res={c}")
+    check("a canvas page asks for no PDF tiles or text", c["noCanvasTiles"] and c["noCanvasText"], f"res={c}")
+    check("drawing near a canvas page's edge grows it", c["grew"], f"res={c}")
+    check("a PDF page inserted at the end goes before the canvas pages", c["insertBeforeCanvas"], f"res={c}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)

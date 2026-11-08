@@ -359,6 +359,37 @@ mod save_pipeline_tests {
         assert_eq!(saved_doc(&target).sheets[0].shapes, shapes);
     }
 
+    /// Plan 097: a canvas saves as tile pages, and reopening shows the
+    /// document's pages plus one canvas page (no tile pages).
+    #[test]
+    fn a_canvas_saves_as_tiles_and_reopens_as_one_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, target, _journal) = session(dir.path());
+        {
+            let mut g = state.doc.lock().unwrap();
+            let d = g.as_mut().unwrap();
+            d.sheets.push(inkwell_core::doc::Sheet::canvas());
+            let ci = d.sheets.len() - 1;
+            let mut far = stroke(77);
+            for p in &mut far.samples {
+                p.x += 700.0; // second tile column
+            }
+            d.push_stroke(ci, stroke(76));
+            d.push_stroke(ci, far);
+        }
+        save_with(&state, (None, None, None, None, None));
+        let saved = std::fs::read(&target).unwrap();
+        let f = PdfFile::open(saved.clone()).unwrap();
+        assert_eq!((f.page_count(), f.real_page_count()), (3, 1), "1 page + 2 tiles");
+
+        let doc = saved_doc(&target);
+        let mut infos = vec![PageInfo { page_index: 0, width_pt: 595.0, height_pt: 842.0, template: None, canvas: false }; 3];
+        drop_canvas_tiles(&saved, &mut infos);
+        append_canvas_pages(&doc, &mut infos);
+        assert_eq!(infos.len(), 2);
+        assert!(infos[1].canvas && infos[1].width_pt >= 1190.0, "{:?}", infos[1]);
+    }
+
     fn saved_doc(target: &Path) -> Document {
         match inkwell_core::pdf::read_sidecar(&std::fs::read(target).unwrap()).unwrap() {
             SidecarStatus::Ok(d) => d,

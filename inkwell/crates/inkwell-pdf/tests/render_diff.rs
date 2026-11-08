@@ -286,3 +286,60 @@ fn filled_form_fields_show_in_pdfium_and_ghostscript() {
         }
     }
 }
+
+/// Plan 097 STOP condition: canvas ink must be visible in other readers.
+/// Every tile page of a 3 x 2 canvas shows ink in PDFium and Ghostscript.
+#[test]
+fn canvas_tiles_show_ink_in_pdfium_and_ghostscript() {
+    let _pdfium_turn = PDFIUM.lock().unwrap_or_else(|e| e.into_inner());
+    let has_gs = Command::new("gs").arg("--version").output().is_ok_and(|o| o.status.success());
+    let pdfium = init_pdfium().ok();
+    let (true, Some(pdfium)) = (has_gs, pdfium) else {
+        assert!(!strict(), "canvas render check needs gs and PDFium (BEZIER_CONFORMANCE_STRICT=1)");
+        return;
+    };
+    let base = fixture("conformance/classic.pdf");
+    let n = PdfFile::open(base.clone()).unwrap().page_count();
+    let mut d = Document::for_pdf(n);
+    d.sheets.push(inkwell_core::doc::Sheet::canvas());
+    let ci = d.sheets.len() - 1;
+    let (tw, th) = inkwell_core::pdf::CANVAS_TILE;
+    let mut ids = IdGen::seeded(97);
+    for row in 0..2 {
+        for col in 0..3 {
+            let mut b = StrokeBuilder::new(ids.next_id(), ToolKind::Pen, [0.0, 0.0, 0.3], Brush { base_width: 8.0, ..Default::default() }, false);
+            for k in 0..20 {
+                b.push(col as f64 * tw + 100.0 + k as f64 * 15.0, row as f64 * th + 200.0 + (k % 2) as f64 * 40.0, 0.8, k as f64 * 8.0);
+            }
+            d.push_stroke(ci, b.finish(0.0));
+        }
+    }
+    let out = save(&pdfium, &base, &d);
+    let total = pdfium.load_pdf_from_byte_slice(&out, None).unwrap().pages().len() as usize;
+    assert_eq!(total, n + 6);
+    for page in n..total {
+        // PDFium
+        let doc = pdfium.load_pdf_from_byte_slice(&out, None).unwrap();
+        let p = doc.pages().get(page as i32).unwrap();
+        let cfg = PdfRenderConfig::new().set_target_width(300).set_clear_color(PdfColor::WHITE).render_annotations(true);
+        let bmp = p.render_with_config(&cfg).unwrap();
+        let dark = bmp.as_raw_bytes().chunks(4).filter(|c| (c[0] as u32 + c[1] as u32 + c[2] as u32) < 300).count();
+        assert!(dark > 200, "PDFium shows no ink on tile page {page} ({dark} px)");
+        // Ghostscript
+        let dir = tempfile::tempdir().unwrap();
+        let (inp, outp) = (dir.path().join("in.pdf"), dir.path().join("out.pgm"));
+        std::fs::write(&inp, &out).unwrap();
+        let st = Command::new("gs")
+            .args(["-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pgmraw", "-r36"])
+            .arg(format!("-dFirstPage={}", page + 1))
+            .arg(format!("-dLastPage={}", page + 1))
+            .arg(format!("-sOutputFile={}", outp.display()))
+            .arg(&inp)
+            .output()
+            .unwrap();
+        assert!(st.status.success());
+        let g = parse_pgm(&std::fs::read(&outp).unwrap());
+        let gdark = g.px.iter().filter(|v| **v < 100).count();
+        assert!(gdark > 100, "Ghostscript shows no ink on tile page {page} ({gdark} px)");
+    }
+}

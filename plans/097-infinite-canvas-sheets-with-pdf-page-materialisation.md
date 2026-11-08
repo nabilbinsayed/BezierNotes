@@ -6,7 +6,7 @@
 | **Effort** | XL |
 | **Category** | Feature / Requirement 6 (optional) |
 | **Depends on** | 091, 095 |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-09; see Outcome) |
 
 ## Why
 
@@ -28,3 +28,37 @@ Requirement #6 and `SPEC.md` M7. `SheetKind::FreeCanvas` already exists in the m
 
 ## STOP Conditions
 - Do not expose FreeCanvas creation in any UI until materialisation passes its verification. Never let users put ink where other readers can't see it.
+
+## Outcome (2026-11-09)
+
+**Materialisation** (`pdf.rs` `materialise_canvases`; done and verified first, as the STOP condition requires).
+- **Tiling.** On save, each `FreeCanvas` sheet's content is split along a fixed A4 grid (`CANVAS_TILE`), with negative coordinates allowed. Every tile with content becomes an ordinary page appended to the root page node, carrying its strokes, images, shapes and text notes as Layers 1–2. Each tile is marked `/Inkw_CanvasTile [<page id> row col]`.
+- **No stacking or orphans.** Tiles are rebuilt on every save: the rebased base has none, and tiles a PDFium page operation baked into a base are dropped from the root `/Kids`. So re-saving never stacks them, and erasing everything leaves no orphan pages.
+- **Reopening.** `PdfFile::real_page_count()` excludes tiles. The canvas reopens from the sidecar as one editable sheet.
+
+**Model and app.**
+- `Sheet::canvas()` (dot template).
+- Canvas sheets always come after the PDF-backed sheets, so PDF page indices never shift. As a result:
+  - the open path drops tile pages before matching sheets to pages, pads PDF sheets before the canvases, and appends one page info per canvas (`canvas: true`, sized to its content plus room, in whole tiles);
+  - `add_canvas_page` and canvas deletion are journalled (`WalEntry::CanvasAdded` / `CanvasRemoved`) and replayed;
+  - duplicate, rotate and move refuse canvas pages with a message;
+  - new PDF pages are inserted before the canvases.
+
+**Frontend.**
+- **Creation.** "Infinite canvas" is a paper size in the Insert Page dialog, and "Add Canvas Page (Infinite)" is in the command palette; both append a canvas page.
+- **No PDF work.** Canvas pages skip PDF tiles, prefetch, thumbnail rendering and text extraction.
+- **Growth.** A canvas page grows by a tile when ink comes within 200 pt of its right or bottom edge.
+
+**Verification.**
+- **Core.** `tests/canvas.rs` (4 tests): a 3×2 canvas saves as exactly 6 extra pages and passes `qpdf --check`; it reopens as one canvas with all its strokes; re-saving doesn't stack; erasing removes the tiles (rebased, or over a base holding tiles); negative coordinates get a page.
+- **Render diff.** Every tile page of a 3×2 canvas shows ink in **both PDFium and Ghostscript**.
+- **App test.** A canvas saved through `save_blocking` becomes 1 page + 2 tiles, and reopens as 2 page infos (the second a canvas).
+- **Smoke.** T35, 4 checks.
+- **Totals.** Rust 172/172, app 27/27, smoke 193/193, strict conformance, clippy and boundaries clean.
+
+**Not done / limits.**
+- **Not truly unbounded.** Canvases grow right and down (in whole pages) rather than being an unbounded plane in every direction; there's no minimap and no 5 %–3,200 % zoom clamp of its own.
+- **Tile settings.** The tile page size is fixed at A4 (no "canvas export page size" setting), and empty tiles are skipped, so a sparse canvas exports as only the tiles with content.
+- **No undo of adding.** Adding a canvas page has no undo; delete it like any page.
+- **Exports.** Page-subset exports don't include canvas pages; an "all pages" export does, as tiles.
+- **Not checked in MuPDF.** Ghostscript and PDFium are what the tests use.

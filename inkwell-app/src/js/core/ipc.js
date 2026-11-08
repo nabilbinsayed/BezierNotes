@@ -159,6 +159,11 @@ export async function journalShapeMutation(op, shape, shapeId = null) {
   });
 }
 
+/** Append an infinite canvas page (Plan 097); returns its page info. */
+export async function addCanvasPage() {
+  return await invokeTauri('add_canvas_page', { seq: nextJournalSeq() });
+}
+
 /** The open PDF's form fields (Plan 096). */
 export async function getFormFields() {
   return await invokeTauri('get_form_fields', {});

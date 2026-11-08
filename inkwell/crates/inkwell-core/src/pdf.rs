@@ -29,6 +29,32 @@ use crate::xref::ObjIndex;
 /// makes Acrobat crawl. Grouping keeps interop without the pathology.
 pub const DEFAULT_GROUP: usize = 64;
 
+/// Page size infinite-canvas sheets are tiled into on save (A4 portrait).
+pub const CANVAS_TILE: (f64, f64) = (595.0, 842.0);
+
+/// Approximate bounds of a text note (page space), as the canvas draws it.
+fn text_bounds(t: &doc::TextObject) -> [f64; 4] {
+    let lines = t.text.split('\n').count().max(1) as f64;
+    let h = (lines * t.font_size.max(6.0) * text_shape::LINE_HEIGHT).max(t.height);
+    [t.x, t.y, t.x + t.width.max(60.0), t.y + h]
+}
+
+/// Bounds of everything on a canvas sheet, or `None` when it is empty.
+pub fn canvas_bounds(sheet: &doc::Sheet) -> Option<[f64; 4]> {
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    let mut grow = |r: [f64; 4]| {
+        b[0] = b[0].min(r[0]);
+        b[1] = b[1].min(r[1]);
+        b[2] = b[2].max(r[2]);
+        b[3] = b[3].max(r[3]);
+    };
+    sheet.strokes().filter_map(|s| s.bbox()).for_each(&mut grow);
+    sheet.images.iter().for_each(|i| grow([i.x, i.y, i.x + i.width, i.y + i.height]));
+    sheet.shapes.iter().for_each(|s| grow(s.bbox()));
+    sheet.text_objects.iter().filter(|t| !t.text.trim().is_empty()).for_each(|t| grow(text_bounds(t)));
+    (b[0] <= b[2]).then_some(b)
+}
+
 pub struct PdfFile {
     /// The input file, followed by objects materialised from object streams
     /// (see `xref`). Only `view[..base_len]` is ever written back out.
@@ -248,6 +274,7 @@ impl PdfFile {
         let hash = Sha256::digest(&sidecar_raw);
 
         // ---- Layer 1 + 2, per sheet ------------------------------------
+        let mut canvases: Vec<&doc::Sheet> = Vec::new();
         for (sheet_idx, sheet) in document.sheets.iter().enumerate() {
             let (page_num, pdf_page_idx) = match sheet.kind {
                 doc::SheetKind::BoundedPage { source_pdf_page } => {
@@ -256,9 +283,11 @@ impl PdfFile {
                         None => continue,
                     }
                 }
-                // FreeCanvas materialisation is M7; skip cleanly rather than
-                // silently dropping ink into the void.
-                doc::SheetKind::FreeCanvas => continue,
+                // Infinite canvases become real pages after the loop.
+                doc::SheetKind::FreeCanvas => {
+                    canvases.push(sheet);
+                    continue;
+                }
             };
             let _ = sheet_idx;
 
@@ -314,6 +343,10 @@ impl PdfFile {
             }
             self.rewrite_page(page_num, &annots)?;
         }
+
+        // Infinite canvas sheets (Plan 097): tiled into ordinary pages so
+        // every reader sees their ink.
+        self.materialise_canvases(&canvases, group)?;
 
         // Form field values the user set (Plan 096), with fresh appearances.
         self.write_form_values(&document.form_values);
@@ -836,6 +869,100 @@ impl PdfFile {
             .into_bytes(),
         );
         Some(annot)
+    }
+
+    /// Whether the page object is a tile we generated from a canvas sheet.
+    fn is_canvas_tile(&self, page: u32) -> bool {
+        self.obj_dict(page).is_ok_and(|d| po::dict_get(&self.view, d, "/Inkw_CanvasTile").is_some())
+    }
+
+    /// Pages that belong to the document itself: everything except canvas
+    /// tiles (which are regenerated from the sidecar on every save).
+    pub fn real_page_count(&self) -> usize {
+        self.pages.iter().filter(|p| !self.is_canvas_tile(**p)).count()
+    }
+
+    /// Plan 097: tile each canvas sheet's content into `CANVAS_TILE`-sized
+    /// pages appended to the root page node, each marked
+    /// `/Inkw_CanvasTile [(page id) row col]`. Only tiles with content are
+    /// written. Tiles a previous save left in the base (which only a PDFium
+    /// page operation can bake in) are dropped, so there are never orphans.
+    fn materialise_canvases(&mut self, canvases: &[&doc::Sheet], group: usize) -> Result<()> {
+        let cat = self.obj_dict(self.root_num)?;
+        let pages_num = po::dict_get(&self.view, cat, "/Pages")
+            .and_then(|r| po::as_ref_num(&self.view, r))
+            .ok_or(Error::Malformed("catalog has no /Pages"))?;
+        let pd = self.obj_dict(pages_num)?;
+        let kids: Vec<u32> = po::dict_get(&self.view, pd, "/Kids").map(|r| refs_in_array(&self.view, r)).unwrap_or_default();
+        let kept: Vec<u32> = kids.iter().copied().filter(|k| !self.is_canvas_tile(*k)).collect();
+        let removed = kids.len() - kept.len();
+        let count = po::dict_get(&self.view, pd, "/Count").and_then(|r| po::as_int(&self.view, r)).unwrap_or(kids.len() as i64);
+
+        let (tw, th) = CANVAS_TILE;
+        let mut tiles = Vec::new();
+        for sheet in canvases {
+            let Some(b) = canvas_bounds(sheet) else { continue };
+            let (c0, c1) = ((b[0] / tw).floor() as i64, ((b[2] - 1e-6) / tw).floor() as i64);
+            let (r0, r1) = ((b[1] / th).floor() as i64, ((b[3] - 1e-6) / th).floor() as i64);
+            for row in r0..=r1 {
+                for col in c0..=c1 {
+                    let (ox, oy) = (col as f64 * tw, row as f64 * th);
+                    let tile = [ox, oy, ox + tw, oy + th];
+                    let hit = |bb: [f64; 4]| bb[0] < tile[2] && bb[2] > tile[0] && bb[1] < tile[3] && bb[3] > tile[1];
+                    // the emitters map page (x, y) to (llx + x, ury - y); the
+                    // outer bounds are wide so nothing is clamped (MediaBox clips)
+                    let pbox = [-ox, -1.0e6, 1.0e6, th + oy];
+                    let strokes: Vec<&Stroke> = sheet.strokes().filter(|s| s.bbox().is_some_and(hit)).collect();
+                    let mut annots = Vec::new();
+                    for img in sheet.images.iter().filter(|i| hit([i.x, i.y, i.x + i.width, i.y + i.height])) {
+                        if let Some(a) = self.emit_image_annot(img, pbox) {
+                            annots.push(a);
+                        }
+                    }
+                    for chunk in strokes.chunks(group) {
+                        if let Some(a) = self.emit_group(chunk, pbox) {
+                            annots.push(a);
+                        }
+                    }
+                    for s in sheet.shapes.iter().filter(|s| hit(s.bbox())) {
+                        if let Some(a) = self.emit_shape_annot(s, pbox) {
+                            annots.push(a);
+                        }
+                    }
+                    for t in sheet.text_objects.iter().filter(|t| !t.text.trim().is_empty() && hit(text_bounds(t))) {
+                        if let Some(a) = self.emit_text_annot(t, pbox) {
+                            annots.push(a);
+                        }
+                    }
+                    if annots.is_empty() {
+                        continue;
+                    }
+                    let refs = annots.iter().map(|a| format!("{a} 0 R")).collect::<Vec<_>>().join(" ");
+                    let page = self.add(
+                        format!(
+                            "<< /Type /Page /Parent {pages_num} 0 R /MediaBox [0 0 {} {}] /Resources << >>                              /Annots [{refs}] /Inkw_CanvasTile [<{:032x}> {row} {col}] >>",
+                            fmt_coord(tw),
+                            fmt_coord(th),
+                            sheet.page_id
+                        )
+                        .into_bytes(),
+                    );
+                    tiles.push(page);
+                }
+            }
+        }
+        if removed == 0 && tiles.is_empty() {
+            return Ok(());
+        }
+        let mut body = b"<< ".to_vec();
+        body.extend_from_slice(&po::dict_without(&self.view, pd, &["/Kids", "/Count"]));
+        body.extend_from_slice(b"/Kids [");
+        for n in kept.iter().chain(tiles.iter()) {
+            body.extend_from_slice(format!("{n} 0 R ").as_bytes());
+        }
+        body.extend_from_slice(format!("] /Count {} >>", count - removed as i64 + tiles.len() as i64).as_bytes());
+        self.replace(pages_num, body);
+        Ok(())
     }
 
     /// Replace the page's `/Annots`, dropping our own from the previous
