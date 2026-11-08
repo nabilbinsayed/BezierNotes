@@ -45,6 +45,7 @@
 //! inkwell_core::wal::atomic_write("lecture.pdf".as_ref(), &f.finish()).unwrap();
 //! ```
 
+pub mod clock;
 pub mod codec;
 pub mod doc;
 pub mod ink;

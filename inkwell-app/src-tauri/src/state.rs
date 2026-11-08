@@ -127,6 +127,9 @@ pub struct AppState {
     /// Highest frontend journal sequence number seen. A save leaves the
     /// document dirty when this has moved past its snapshot.
     pub journal_seq_hi: std::sync::atomic::AtomicU64,
+    /// This installation, for the clocks a save stamps (Plan 091). Loaded
+    /// from the config dir at startup; a per-launch one until then.
+    pub device: Mutex<inkwell_core::clock::DeviceIdentity>,
 }
 
 impl Default for AppState {
@@ -149,6 +152,7 @@ impl Default for AppState {
             save_generation: std::sync::atomic::AtomicU64::new(0),
             save_lock: Mutex::new(()),
             journal_seq_hi: std::sync::atomic::AtomicU64::new(0),
+            device: Mutex::new(crate::device::generate()),
         }
     }
 }

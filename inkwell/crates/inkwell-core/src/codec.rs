@@ -146,6 +146,13 @@ pub fn encode(strokes: &[Stroke]) -> Vec<u8> {
 }
 
 pub fn decode(buf: &[u8]) -> Result<Vec<Stroke>, CodecError> {
+    decode_prefix(buf).map(|(strokes, _)| strokes)
+}
+
+/// Like `decode`, also returning how many bytes the payload occupied. Readers
+/// ignore anything after it, which is how the sidecar appends its stroke clock
+/// column without breaking older builds.
+pub fn decode_prefix(buf: &[u8]) -> Result<(Vec<Stroke>, usize), CodecError> {
     if buf.len() < 5 || &buf[0..4] != MAGIC {
         return Err(CodecError::BadMagic);
     }
@@ -194,5 +201,5 @@ pub fn decode(buf: &[u8]) -> Result<Vec<Stroke>, CodecError> {
         }
         out.push(Stroke { id, kind, rgb, brush, samples });
     }
-    Ok(out)
+    Ok((out, pos))
 }

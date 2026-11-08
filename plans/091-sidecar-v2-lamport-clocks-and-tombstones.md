@@ -6,7 +6,7 @@
 | **Effort** | M (~500 lines, Rust core + WAL + JS stamping) |
 | **Category** | Architecture / Multi-Device Sync |
 | **Depends on** | 087, 088 |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-08; see Outcome) |
 
 ## Why
 
@@ -64,3 +64,65 @@ This plan adds the metadata. Plan 092 adds the merge.
 
 ## STOP Conditions
 - STOP if any v1 file fails to open after this change. Add every v1 fixture from 087 to a `v1_compat` test first.
+
+## Outcome (2026-11-08)
+
+**Data model** (`inkwell-core/src/clock.rs`, `doc.rs`).
+- `Clock { lamport, device }` is ordered by `(lamport, device)`. `DeviceId` is a `u64`, with `0` reserved for "unknown / pre-091". `ObjectId` covers stroke / image / text / bookmark / page and serialises as a prefixed string (`s:<hex>`, `t:<id>`, …) so it can key a JSON map.
+- `Document` gains:
+  - `clock`: the highest Lamport value seen;
+  - `peers`: `DeviceId → { clock, label }`;
+  - `clocks`: `ObjectId → { created, modified }`, sparse, so a missing entry means zero clocks;
+  - `tombstones`: `ObjectId → { clock, unix_s }`.
+- `Sheet` gains `page_id: u128` and `order_key: String` (fractional base-62 keys; `key_between`, `keys_between` bisects so bulk keys stay short).
+- Base PDF pages get `sha256("base-page", base_fingerprint, index)` at open. `base_fingerprint` is the SHA-256 of `writable_base`, so two devices opening the same file agree.
+- `duplicate_sheet` clears the copy's id and key, so the copy becomes a new page.
+- Tombstone GC: a tombstone is dropped only when it is older than 90 days **and** at or below every peer's clock.
+
+**Where clocks are assigned (a deliberate deviation).** The plan had the frontend carry clocks through IPC and the WAL record them. Instead, `Document::restamp(me, now)` runs once per save in `save_blocking`, right after the frontend payload is applied and under `save_lock`:
+- It diffs every object's content hash against the baseline taken at load (`decode_sidecar` seals it) or at the last stamp.
+- Each appeared object gets `created`, each changed object gets `modified`, and each vanished object gets a tombstone, all with fresh ticks from this device. A re-added object (an undone delete) loses its tombstone.
+
+Edits between saves never leave this device; they live only in the journal. So stamping them at save time can't be told apart from stamping them as they happen. As a result, JS, IPC and the WAL format are unchanged, and journals written before 091 still replay.
+- **Lamport monotonicity across a crash.** The sidecar persists `clock`. Replay applies the journal, and the next save ticks above the persisted value (tested).
+- **Hashes are taken at the codec's resolution** (1/50 pt, 10-bit pressure, 0.1 ms; positions at 1/100 pt), because the save path rebuilds the document from the frontend's JSON copy every time. An app test (`save_stamps_only_what_the_frontend_changed`) checks two things. Sending the frontend's unchanged copy back stamps nothing. Moving one stroke stamps exactly that stroke. A proptest also checks that `ink::simplify`, which re-runs on every save, is idempotent: if it weren't, every save would stamp every stroke.
+
+**Strokes are not immutable in practice.** The lasso moves strokes in place under the same id. So strokes get a `modified` clock too, rather than "lasso = new id + tombstone". Changing the lasso to re-id strokes would have touched undo, selection and the WAL for no benefit to the merge.
+
+**Format: schema 2 inside container v1, not `SIDECAR_VERSION = 2`.** The plan bumped the container byte and accepted that older builds would fall back to Layer 2. They don't: no `/InkList` reconstruction exists. An older build would have opened the file with **no** ink in its model, and its next save would have dropped every stroke. Instead:
+- The skeleton gains fields: `schema: 2`, `clock`, `peers`, `clocks` (non-stroke objects), `tombstones`, `stroke_clock_devices`, and per-sheet `page_id` / `order_key`. Older readers ignore unknown JSON fields.
+- Stroke clocks go in an `IWCK` column after the codec payload, which older decoders never read past. The column holds a device-table index plus a varint Lamport value per clock, with `modified` stored as a delta.
+- `/Inkw_Ver` stays 1.
+
+This was verified against the real pre-091 build (`HEAD` in a scratch worktree): it reads a schema-2 file with all 6 sheets, 12 strokes, the text and the bookmark. When it saves, it drops the clocks; the next save here stamps those objects afresh. README notes this.
+
+**Verification.**
+- **v1 compatibility (the STOP condition).** Pre-091 fixtures were written by the pre-091 code before any change: `inkwell/fixtures/v1/notes_v1.{iwdc,pdf}` (5 base pages + 1 inserted, a reorder, 12 strokes, image, Bengali text, bookmark, template) and `xref_stream_v1.pdf`. Each decodes with every object. `notes_v1.pdf` also re-saves as schema 2 and round-trips with clocks.
+- **New `tests/sync_meta.rs` (19 tests).** It covers:
+  - round trip;
+  - no-change restamp is a no-op;
+  - exact stamping of add / edit / delete / in-place move;
+  - undo-delete revives;
+  - a reorder re-keys one page only (LIS) and leaves its strokes' clocks alone;
+  - duplicate and inserted pages get unique ids;
+  - deterministic base page ids;
+  - tombstone GC;
+  - WAL replay monotonicity;
+  - the pre-091 reader's view;
+  - key-insertion and round-trip proptests;
+  - `simplify` idempotence.
+- **Size budget.** 5,000 strokes stamped by three devices: +2.09 % vs the pre-091 encoding (budget 5 %).
+- **Totals.**
+  - Rust workspace 140/140; clippy clean on both workspaces; strict conformance + render diff pass.
+  - Golden snapshots regenerated: only the sidecar bytes and hash changed.
+  - App crate 20/20 (new: device identity, save stamping).
+  - Smoke 164/164; boundaries clean; torture 60/60.
+
+**Device identity** (`src-tauri/src/device.rs`). This is a random id plus the host name as its label, created on first launch in the app config dir (`device.json`, written with `atomic_write`). If that fails, the app logs a warning and uses a per-launch id.
+
+**Not done / limits.**
+- **No merge yet.** Plan 092 compares clocks; nothing reads them yet.
+- **Peer label.** The label is the bare host name; the merge UI (092) may want "user on host" or a user-editable name.
+- **Bookmarks.** Bookmarks hash `page` as an index, so a page reorder that shifts a bookmark's page index stamps it as modified. That is harmless for union merge; 092 can switch bookmarks to page ids if it matters.
+- **Lib docs.** `inkwell-core`'s crate docs still say a stripped sidecar falls back to `/InkList` reconstruction; that path doesn't exist (pre-existing).
+- **Not run in the desktop app.** It needs a real save on a real device to see `device.json` created.

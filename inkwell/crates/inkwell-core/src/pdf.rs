@@ -918,6 +918,13 @@ pub fn writable_base(bytes: &[u8]) -> &[u8] {
     rebase_len(bytes).map_or(bytes, |n| &bytes[..n])
 }
 
+/// SHA-256 of the file's original bytes (`writable_base`): what base page ids
+/// are derived from (`Document::assign_base_page_ids`), so every device that
+/// opens the same file, saved by us or not, gives its pages the same ids.
+pub fn base_fingerprint(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(writable_base(bytes)).into()
+}
+
 fn rebase_len(bytes: &[u8]) -> Option<usize> {
     ::memchr::memmem::find(bytes, b"/Inkw_Base ")?;
     let mut view = bytes.to_vec();

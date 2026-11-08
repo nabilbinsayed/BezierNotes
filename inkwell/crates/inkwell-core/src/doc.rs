@@ -1,8 +1,10 @@
 //! Document model and the sidecar container.
 
+use crate::clock::{self, Clock, DeviceId, DeviceIdentity, Fnv, ObjClock, ObjectId, Peer, Tombstone};
 use crate::codec;
 use crate::ink::{Stroke, NOMINAL_HZ};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SheetKind {
@@ -72,6 +74,15 @@ pub struct Sheet {
     pub text_objects: Vec<TextObject>,
     #[serde(default)]
     pub template: Option<String>,
+    /// Stable identity across devices (Plan 091). `0` = not assigned yet: base
+    /// PDF pages get one derived from the base file at open
+    /// (`Document::assign_base_page_ids`), new pages one at the next save.
+    #[serde(default, with = "clock::hex_u128")]
+    pub page_id: u128,
+    /// Fractional position key (`clock::key_between`); page order is the
+    /// order of these keys. Empty = not assigned yet.
+    #[serde(default)]
+    pub order_key: String,
 }
 
 impl Sheet {
@@ -82,6 +93,8 @@ impl Sheet {
             images: Vec::new(),
             text_objects: Vec::new(),
             template: None,
+            page_id: 0,
+            order_key: String::new(),
         }
     }
     pub fn blank() -> Self {
@@ -91,6 +104,8 @@ impl Sheet {
             images: Vec::new(),
             text_objects: Vec::new(),
             template: None,
+            page_id: 0,
+            order_key: String::new(),
         }
     }
     pub fn strokes(&self) -> impl Iterator<Item = &Stroke> {
@@ -169,6 +184,32 @@ pub struct Document {
     pub viewports: Vec<Viewport>,
     #[serde(default)]
     pub bookmarks: Vec<Bookmark>,
+    // --- sync metadata (Plan 091, see `clock`) ---
+    /// The largest Lamport value this document has seen.
+    #[serde(default)]
+    pub clock: u64,
+    #[serde(default)]
+    pub peers: BTreeMap<DeviceId, Peer>,
+    /// Sparse: an object without an entry has zero clocks.
+    #[serde(default)]
+    pub clocks: BTreeMap<ObjectId, ObjClock>,
+    #[serde(default)]
+    pub tombstones: BTreeMap<ObjectId, Tombstone>,
+    /// Content hashes of every object as last loaded or stamped; what
+    /// `restamp` diffs against. A cache, not document state.
+    #[serde(skip)]
+    known: Known,
+}
+
+/// Equality ignores it: two documents with the same content and clocks are
+/// equal however they were reached.
+#[derive(Debug, Clone, Default)]
+struct Known(HashMap<ObjectId, u64>);
+
+impl PartialEq for Known {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Default for Document {
@@ -179,6 +220,11 @@ impl Default for Document {
             sheets: Vec::new(),
             viewports: vec![Viewport::default()],
             bookmarks: Vec::new(),
+            clock: 0,
+            peers: BTreeMap::new(),
+            clocks: BTreeMap::new(),
+            tombstones: BTreeMap::new(),
+            known: Known::default(),
         }
     }
 }
@@ -215,6 +261,9 @@ impl Document {
             txt.sheet = target_idx;
             txt.id = format!("{}_dup_{}_{}", txt.id, target_idx, i);
         }
+        // A copy is a new page, not a second instance of this one.
+        cloned.page_id = 0;
+        cloned.order_key.clear();
         self.sheets.insert(target_idx, cloned);
         self.reindex_bounded_sheets();
         Some(target_idx)
@@ -374,17 +423,276 @@ impl Document {
 }
 
 // ---------------------------------------------------------------------------
+// Sync metadata (Plan 091)
+// ---------------------------------------------------------------------------
+
+/// Object positions are compared at 1/100 pt.
+const POS_Q: f64 = 100.0;
+
+fn page_hash(sh: &Sheet) -> u64 {
+    let mut h = Fnv::new();
+    // `source_pdf_page` is just the current index (see
+    // `reindex_bounded_sheets`), so only the kind itself counts.
+    h.word(match sh.kind {
+        SheetKind::BoundedPage { .. } => 1,
+        SheetKind::FreeCanvas => 2,
+    });
+    h.bytes(sh.template.as_deref().unwrap_or("\0").as_bytes());
+    h.bytes(sh.order_key.as_bytes());
+    for l in &sh.layers {
+        h.bytes(l.name.as_bytes()).word(l.visible as u64);
+    }
+    h.finish()
+}
+
+fn stroke_hash(page: u128, s: &Stroke) -> u64 {
+    // Strokes are not immutable in practice: a lasso move rewrites samples in
+    // place under the same id. So their content is hashed like any object's.
+    // Hashed at the codec's resolution: the save path rebuilds strokes from
+    // the frontend's copy, and float noise below what the file can store is
+    // not an edit.
+    let mut h = Fnv::new();
+    h.word(page as u64).word((page >> 64) as u64).word(s.kind.as_u8() as u64);
+    for c in s.rgb {
+        h.q(c.clamp(0.0, 1.0), 255.0);
+    }
+    h.q(s.brush.base_width, 100.0).q(s.brush.gamma, 1000.0).q(s.brush.min_ratio, 1000.0);
+    for sm in &s.samples {
+        h.q(sm.x, codec::QUANT).q(sm.y, codec::QUANT).q(sm.p.clamp(0.0, 1.0), codec::PQUANT).q(sm.t, codec::TQUANT);
+    }
+    h.finish()
+}
+
+fn image_hash(page: u128, im: &ImageObject) -> u64 {
+    let mut h = Fnv::new();
+    h.word(page as u64).word((page >> 64) as u64);
+    h.q(im.x, POS_Q).q(im.y, POS_Q).q(im.width, POS_Q).q(im.height, POS_Q).bytes(im.data_url.as_bytes());
+    h.finish()
+}
+
+fn text_hash(page: u128, t: &TextObject) -> u64 {
+    let mut h = Fnv::new();
+    h.word(page as u64).word((page >> 64) as u64);
+    h.q(t.x, POS_Q).q(t.y, POS_Q).q(t.width, POS_Q).q(t.height, POS_Q).q(t.font_size, POS_Q);
+    h.bytes(t.text.as_bytes()).bytes(t.color.as_bytes()).word(t.bold as u64).word(t.italic as u64);
+    h.finish()
+}
+
+fn bookmark_hash(b: &Bookmark) -> u64 {
+    let mut h = Fnv::new();
+    h.word(b.page as u64).bytes(b.label.as_bytes()).word(b.created_at);
+    h.finish()
+}
+
+impl Document {
+    /// Every object with its content hash. Objects are hashed with the id of
+    /// the page holding them, so moving one to another page is a change but
+    /// reordering pages is not.
+    fn object_hashes(&self) -> HashMap<ObjectId, u64> {
+        let mut out = HashMap::with_capacity(self.stroke_count() + self.sheets.len() + self.bookmarks.len());
+        for sh in &self.sheets {
+            let p = sh.page_id;
+            // An unassigned page has no identity yet; `restamp` gives it one.
+            if p != 0 {
+                out.insert(ObjectId::Page(p), page_hash(sh));
+            }
+            for s in sh.strokes() {
+                out.insert(ObjectId::Stroke(s.id), stroke_hash(p, s));
+            }
+            for im in &sh.images {
+                out.insert(ObjectId::Image(im.id.clone()), image_hash(p, im));
+            }
+            for t in &sh.text_objects {
+                out.insert(ObjectId::Text(t.id.clone()), text_hash(p, t));
+            }
+        }
+        for b in &self.bookmarks {
+            out.insert(ObjectId::Bookmark(b.id.clone()), bookmark_hash(b));
+        }
+        out
+    }
+
+    /// Clocks of one object (zero if it has none).
+    pub fn clock_of(&self, id: &ObjectId) -> ObjClock {
+        self.clocks.get(id).copied().unwrap_or_default()
+    }
+
+    fn tick(&mut self, device: DeviceId) -> Clock {
+        self.clock += 1;
+        Clock { lamport: self.clock, device }
+    }
+
+    /// Raise `clock` to the largest value recorded anywhere in the document,
+    /// so the next local tick is newer than everything already in it.
+    fn observe_all(&mut self) {
+        let mut hi = self.clock;
+        for c in self.clocks.values() {
+            hi = hi.max(c.created.lamport).max(c.modified.lamport);
+        }
+        for t in self.tombstones.values() {
+            hi = hi.max(t.clock.lamport);
+        }
+        for p in self.peers.values() {
+            hi = hi.max(p.clock);
+        }
+        self.clock = hi;
+    }
+
+    /// Record the current content as the baseline `restamp` diffs against.
+    /// Done by `decode_sidecar`; call it after building a document by other
+    /// means only if its objects should count as already stamped.
+    pub fn seal(&mut self) {
+        self.known = Known(self.object_hashes());
+    }
+
+    /// Give base PDF pages that have no id yet one derived from the base file
+    /// and their position, so two devices opening the same file agree.
+    /// `base_fingerprint` identifies the original bytes (e.g. their SHA-256).
+    /// Call it at open, before any edit is applied.
+    pub fn assign_base_page_ids(&mut self, base_fingerprint: &[u8]) {
+        let mut assigned = false;
+        for (i, sh) in self.sheets.iter_mut().enumerate() {
+            if sh.page_id == 0 {
+                sh.page_id = clock::derive_u128(&[b"base-page", base_fingerprint, &(i as u64).to_le_bytes()]);
+                assigned = true;
+            }
+        }
+        // Ids are identity, not content: assigning them is not an edit, but
+        // it changes every hash on those pages, so re-take the baseline.
+        if assigned && !self.known.0.is_empty() {
+            self.seal();
+        }
+    }
+
+    /// Stamp everything that changed since the last `seal`/`restamp` with a
+    /// fresh clock from `me`: new objects get `created`, changed ones
+    /// `modified`, vanished ones a tombstone. Also assigns missing page ids
+    /// and order keys, and collects old tombstones. Call before encoding.
+    /// Returns whether anything was stamped.
+    pub fn restamp(&mut self, me: &DeviceIdentity, now_s: u64) -> bool {
+        self.observe_all();
+        let before = self.clock;
+
+        for i in 0..self.sheets.len() {
+            if self.sheets[i].page_id == 0 {
+                let c = self.tick(me.id);
+                self.sheets[i].page_id =
+                    clock::derive_u128(&[b"page", &me.id.to_le_bytes(), &c.lamport.to_le_bytes()]);
+            }
+        }
+        self.assign_order_keys();
+
+        let current = self.object_hashes();
+        let known = std::mem::take(&mut self.known.0);
+        // Deterministic stamping order, so equal edits give equal clocks.
+        let mut ids: Vec<&ObjectId> = current.keys().collect();
+        ids.sort();
+        for id in ids {
+            let h = current[id];
+            match known.get(id) {
+                None => {
+                    let c = self.tick(me.id);
+                    self.clocks.insert(id.clone(), ObjClock { created: c, modified: c });
+                    // Re-added (an undone delete): alive again.
+                    self.tombstones.remove(id);
+                }
+                Some(&old) if old != h => {
+                    let c = self.tick(me.id);
+                    self.clocks.entry(id.clone()).or_default().modified = c;
+                }
+                Some(_) => {}
+            }
+        }
+        let mut gone: Vec<&ObjectId> = known.keys().filter(|id| !current.contains_key(*id)).collect();
+        gone.sort();
+        for id in gone {
+            let c = self.tick(me.id);
+            self.clocks.remove(id);
+            self.tombstones.insert(id.clone(), Tombstone { clock: c, unix_s: now_s });
+        }
+        self.known = Known(current);
+
+        let stamped = self.clock != before;
+        if stamped || !self.peers.contains_key(&me.id) {
+            let peer = self.peers.entry(me.id).or_default();
+            peer.clock = self.clock;
+            peer.label = me.label.clone();
+        }
+        self.collect_tombstones(now_s);
+        stamped
+    }
+
+    /// Keep the longest run of pages whose keys are already in order and give
+    /// every other page a key between its kept neighbours, so a reorder
+    /// changes one key, not every key after it.
+    fn assign_order_keys(&mut self) {
+        let keys: Vec<Option<&str>> = self
+            .sheets
+            .iter()
+            .map(|s| Some(s.order_key.as_str()).filter(|k| clock::is_valid_key(k)))
+            .collect();
+        let keep = clock::longest_increasing(&keys);
+        if keep.len() == self.sheets.len() {
+            return;
+        }
+        let mut kept = vec![false; self.sheets.len()];
+        for &i in &keep {
+            kept[i] = true;
+        }
+        let mut i = 0;
+        while i < self.sheets.len() {
+            if kept[i] {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < self.sheets.len() && !kept[i] {
+                i += 1;
+            }
+            let lo = start.checked_sub(1).map(|j| self.sheets[j].order_key.clone());
+            let hi = self.sheets.get(i).map(|s| s.order_key.clone());
+            let fresh = clock::keys_between(lo.as_deref(), hi.as_deref(), i - start);
+            for (sh, k) in self.sheets[start..i].iter_mut().zip(fresh) {
+                sh.order_key = k;
+            }
+        }
+    }
+
+    /// Drop tombstones that are both older than `TOMBSTONE_MIN_AGE_S` and
+    /// covered by every known device's clock: no peer can still hold the
+    /// object they delete. Conservative on purpose; tombstones are tiny.
+    fn collect_tombstones(&mut self, now_s: u64) {
+        let Some(floor) = self.peers.values().map(|p| p.clock).min() else { return };
+        self.tombstones.retain(|_, t| {
+            now_s.saturating_sub(t.unix_s) < clock::TOMBSTONE_MIN_AGE_S || t.clock.lamport > floor
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sidecar container
 // ---------------------------------------------------------------------------
 //
 //   magic  "IWDC"
-//   u8     version
+//   u8     version (container; still 1, see below)
 //   u32LE  json length
 //   ..     JSON document skeleton (structure, no sample data)
 //   ..     binary stroke payload (codec.rs), strokes in sheet/layer order
+//   ..     schema 2: stroke clock column (see `encode_stroke_clocks`)
+//
+// Schema 2 (Plan 091) adds sync metadata without bumping the container
+// version: the skeleton gains fields (`schema`, `clock`, `peers`, `clocks`,
+// `tombstones`, per-sheet `page_id`/`order_key`) that older readers ignore,
+// and the clock column sits after the codec payload, which older readers
+// never look past. So a file saved by this version still opens in an older
+// build with every stroke intact; that build just drops the clocks when it
+// saves, and the next save here stamps the objects afresh.
 
 pub const SIDECAR_MAGIC: &[u8; 4] = b"IWDC";
 pub const SIDECAR_VERSION: u8 = 1;
+/// Skeleton schema. 1 = no sync metadata (pre-091), 2 = clocks + tombstones.
+pub const SIDECAR_SCHEMA: u32 = 2;
+const CLOCK_COLUMN_MAGIC: &[u8; 4] = b"IWCK";
 
 #[derive(Debug)]
 pub enum SidecarError {
@@ -413,34 +721,121 @@ impl std::fmt::Display for SidecarError {
 
 impl std::error::Error for SidecarError {}
 
+/// Stroke clocks as a column parallel to the codec payload (JSON would cost
+/// ~60 bytes a stroke): a device table index and Lamport value for `created`,
+/// then `modified` as a delta from it. Device index 0 is `ZERO_DEVICE`;
+/// `devices` lists the rest and goes in the skeleton.
+fn encode_stroke_clocks(doc: &Document, strokes: &[&Stroke], devices: &mut Vec<DeviceId>) -> Vec<u8> {
+    let mut idx = |d: DeviceId| -> u64 {
+        if d == clock::ZERO_DEVICE {
+            return 0;
+        }
+        match devices.iter().position(|&x| x == d) {
+            Some(p) => p as u64 + 1,
+            None => {
+                devices.push(d);
+                devices.len() as u64
+            }
+        }
+    };
+    let mut out = Vec::with_capacity(4 + strokes.len() * 4);
+    out.extend_from_slice(CLOCK_COLUMN_MAGIC);
+    for s in strokes {
+        let c = doc.clock_of(&ObjectId::Stroke(s.id));
+        codec::put_uvarint(&mut out, idx(c.created.device));
+        codec::put_uvarint(&mut out, c.created.lamport);
+        codec::put_uvarint(&mut out, idx(c.modified.device));
+        codec::put_varint(&mut out, c.modified.lamport as i64 - c.created.lamport as i64);
+    }
+    out
+}
+
+fn decode_stroke_clocks(
+    buf: &[u8],
+    strokes: &[Stroke],
+    devices: &[DeviceId],
+    into: &mut BTreeMap<ObjectId, ObjClock>,
+) -> std::result::Result<(), SidecarError> {
+    if buf.is_empty() {
+        return Ok(()); // schema 1: no column, every stroke has zero clocks
+    }
+    if buf.len() < 4 || &buf[..4] != CLOCK_COLUMN_MAGIC {
+        return Err(SidecarError::Truncated);
+    }
+    let dev = |i: u64| -> std::result::Result<DeviceId, SidecarError> {
+        match i {
+            0 => Ok(clock::ZERO_DEVICE),
+            i => devices.get(i as usize - 1).copied().ok_or(SidecarError::Truncated),
+        }
+    };
+    let mut pos = 4usize;
+    for s in strokes {
+        let cd = dev(codec::get_uvarint(buf, &mut pos).map_err(SidecarError::Codec)?)?;
+        let cl = codec::get_uvarint(buf, &mut pos).map_err(SidecarError::Codec)?;
+        let md = dev(codec::get_uvarint(buf, &mut pos).map_err(SidecarError::Codec)?)?;
+        let ml = cl as i64 + codec::get_varint(buf, &mut pos).map_err(SidecarError::Codec)?;
+        let oc = ObjClock {
+            created: Clock { lamport: cl, device: cd },
+            modified: Clock { lamport: ml.max(0) as u64, device: md },
+        };
+        if oc != ObjClock::default() {
+            into.insert(ObjectId::Stroke(s.id), oc);
+        }
+    }
+    Ok(())
+}
+
 pub fn encode_sidecar(doc: &Document) -> Vec<u8> {
-    let strokes: Vec<Stroke> = doc.sheets.iter().flat_map(|s| s.strokes().cloned()).collect();
+    let strokes: Vec<&Stroke> = doc.sheets.iter().flat_map(|s| s.strokes()).collect();
     // Layer::strokes is #[serde(skip)], so the JSON carries structure only and
     // all bulk sample data goes through the compact codec.
     let mut counts = Vec::new();
     for sh in &doc.sheets {
         counts.push(sh.layers.iter().map(|l| l.strokes.len()).collect::<Vec<_>>());
     }
+    let mut devices = Vec::new();
+    let column = encode_stroke_clocks(doc, &strokes, &mut devices);
+    let object_clocks: BTreeMap<&ObjectId, &ObjClock> =
+        doc.clocks.iter().filter(|(id, _)| !matches!(id, ObjectId::Stroke(_))).collect();
     let skeleton = serde_json::json!({
+        "schema": SIDECAR_SCHEMA,
         "generation": doc.generation,
         "device": doc.device,
         "sheets": doc.sheets,
         "viewports": doc.viewports,
         "bookmarks": doc.bookmarks,
         "layer_stroke_counts": counts,
+        "clock": doc.clock,
+        "peers": doc.peers,
+        "clocks": object_clocks,
+        "tombstones": doc.tombstones,
+        "stroke_clock_devices": devices,
     });
     let json = serde_json::to_vec(&skeleton).expect("skeleton is serialisable");
-    let payload = codec::encode(&strokes);
+    let payload = codec::encode(&strokes.into_iter().cloned().collect::<Vec<_>>());
 
-    let mut out = Vec::with_capacity(9 + json.len() + payload.len());
+    let mut out = Vec::with_capacity(9 + json.len() + payload.len() + column.len());
     out.extend_from_slice(SIDECAR_MAGIC);
     out.push(SIDECAR_VERSION);
     out.extend_from_slice(&(json.len() as u32).to_le_bytes());
     out.extend_from_slice(&json);
     out.extend_from_slice(&payload);
+    out.extend_from_slice(&column);
     out
 }
 
+fn json_field<T: serde::de::DeserializeOwned + Default>(
+    sk: &serde_json::Value,
+    key: &str,
+) -> std::result::Result<T, SidecarError> {
+    match sk.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(T::default()),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| SidecarError::Json(format!("{key}: {e}"))),
+    }
+}
+
+/// Decodes schema 1 and 2. The result is sealed (`Document::seal`): what was
+/// read counts as already stamped.
 pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError> {
     if buf.len() < 9 || &buf[0..4] != SIDECAR_MAGIC {
         return Err(SidecarError::BadMagic);
@@ -455,7 +850,12 @@ pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError>
     }
     let sk: serde_json::Value =
         serde_json::from_slice(&buf[9..jend]).map_err(|e| SidecarError::Json(e.to_string()))?;
-    let strokes = codec::decode(&buf[jend..]).map_err(SidecarError::Codec)?;
+    let (strokes, used) = codec::decode_prefix(&buf[jend..]).map_err(SidecarError::Codec)?;
+
+    let mut clocks: BTreeMap<ObjectId, ObjClock> = json_field(&sk, "clocks")?;
+    clocks.retain(|_, c| *c != ObjClock::default());
+    let devices: Vec<DeviceId> = json_field(&sk, "stroke_clock_devices")?;
+    decode_stroke_clocks(&buf[jend + used..], &strokes, &devices, &mut clocks)?;
 
     let mut doc = Document {
         generation: sk["generation"].as_u64().unwrap_or(0),
@@ -465,6 +865,11 @@ pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError>
         viewports: serde_json::from_value(sk["viewports"].clone())
             .unwrap_or_else(|_| vec![Viewport::default()]),
         bookmarks: serde_json::from_value(sk["bookmarks"].clone()).unwrap_or_default(),
+        clock: sk["clock"].as_u64().unwrap_or(0),
+        peers: json_field(&sk, "peers")?,
+        clocks,
+        tombstones: json_field(&sk, "tombstones")?,
+        known: Known::default(),
     };
 
     let counts: Vec<Vec<usize>> =
@@ -482,5 +887,7 @@ pub fn decode_sidecar(buf: &[u8]) -> std::result::Result<Document, SidecarError>
             layer.strokes = it.by_ref().take(n).collect();
         }
     }
+    doc.observe_all();
+    doc.seal();
     Ok(doc)
 }

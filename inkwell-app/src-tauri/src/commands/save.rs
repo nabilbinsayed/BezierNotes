@@ -141,6 +141,19 @@ fn save_blocking(
 
     let (images, strokes, texts, bookmarks) = payload;
     apply_frontend_payload(state, images, strokes, texts, bookmarks)?;
+    // Clocks are stamped here, at the persistence boundary: every object
+    // that appeared, changed or vanished since the last load or save gets a
+    // fresh Lamport value from this device (Plan 091).
+    {
+        let me = state.device.lock().unwrap().clone();
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        if let Some(doc) = state.doc.lock().unwrap().as_mut() {
+            doc.restamp(&me, now_s);
+        }
+    }
 
     // Snapshot, then release the document so inking (commit_stroke) never
     // waits on PDF generation.
@@ -326,5 +339,79 @@ mod save_pipeline_tests {
         state.save_generation.store(5, std::sync::atomic::Ordering::Release);
         save_blocking(&state, 4, None, (None, None, None, None), Some(0)).expect("superseded save is not an error");
         assert_eq!(std::fs::read(&target).unwrap(), before, "an older snapshot must not reach disk");
+    }
+
+    fn saved_doc(target: &Path) -> Document {
+        match inkwell_core::pdf::read_sidecar(&std::fs::read(target).unwrap()).unwrap() {
+            SidecarStatus::Ok(d) => d,
+            _ => panic!("sidecar not Ok"),
+        }
+    }
+
+    fn save_with(state: &AppState, payload: SavePayload) {
+        let generation = state.save_generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+        save_blocking(state, generation, None, payload, None).expect("save");
+    }
+
+    /// Plan 091: the frontend sends its whole copy of the document with every
+    /// save. Sending back what it was given must stamp nothing; one edit must
+    /// stamp that edit only.
+    #[test]
+    fn save_stamps_only_what_the_frontend_changed() {
+        use inkwell_core::clock::ObjectId;
+        let dir = tempfile::tempdir().unwrap();
+        let (state, target, _journal) = session(dir.path());
+        let mut ids = IdGen::seeded(91);
+        // simplified, as commit_stroke stores them
+        let committed = |id| {
+            let mut s = stroke(id);
+            s.samples = inkwell_core::ink::simplify(&s.samples, 0.10);
+            s
+        };
+        let (a, b) = (committed(ids.next_id()), committed(ids.next_id()));
+        {
+            let mut g = state.doc.lock().unwrap();
+            let d = g.as_mut().unwrap();
+            d.assign_base_page_ids(&inkwell_core::pdf::base_fingerprint(&fixture()));
+            d.push_stroke(0, a.clone());
+            d.push_stroke(0, b.clone());
+            d.upsert_text(0, inkwell_core::doc::TextObject {
+                id: "note".into(), sheet: 0, x: 72.5, y: 300.25, text: "Lamport".into(), font_size: 14.0,
+                color: "#112233".into(), bold: false, italic: true, width: 120.0, height: 24.0,
+            });
+            d.push_image(0, inkwell_core::doc::ImageObject {
+                id: "img_1".into(), sheet: 0, x: 40.0, y: 50.0, width: 30.0, height: 20.0,
+                data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
+            });
+            d.bookmarks.push(inkwell_core::doc::Bookmark { id: "bm".into(), page: 0, label: "Intro".into(), created_at: 9 });
+        }
+        save_with(&state, (None, None, None, None));
+        let first = saved_doc(&target);
+        assert!(first.clock > 0 && first.clock_of(&ObjectId::Stroke(a.id)).created.lamport > 0);
+        let me = state.device.lock().unwrap().id;
+        assert_eq!(first.peers[&me].clock, first.clock);
+
+        // reopen, as open_pdf does, and save the frontend's unchanged copy
+        *state.doc.lock().unwrap() = Some(first.clone());
+        let unchanged = |d: &Document| (Some(extract_frontend_images(d)), Some(extract_frontend_strokes(d)), Some(extract_frontend_texts(d)), Some(d.bookmarks.clone()));
+        save_with(&state, unchanged(&first));
+        let second = saved_doc(&target);
+        assert_eq!(second.clock, first.clock, "a round trip through the frontend is not an edit");
+        assert_eq!(second.clocks, first.clocks);
+        assert!(second.clocks.contains_key(&ObjectId::Text("note".into())));
+        assert!(second.clocks.contains_key(&ObjectId::Image("img_1".into())));
+
+        // move one stroke (as the lasso does) and save again
+        let mut payload = unchanged(&second);
+        let moved = payload.1.as_mut().unwrap().iter_mut().find(|s| s.id == format!("{:032x}", b.id)).expect("stroke b");
+        for p in &mut moved.points {
+            p.x += 12.0;
+        }
+        save_with(&state, payload);
+        let third = saved_doc(&target);
+        let (ca, cb) = (third.clock_of(&ObjectId::Stroke(a.id)), third.clock_of(&ObjectId::Stroke(b.id)));
+        assert_eq!(ca, second.clock_of(&ObjectId::Stroke(a.id)), "untouched stroke keeps its clocks");
+        assert!(cb.modified.lamport > second.clock && cb.created == second.clock_of(&ObjectId::Stroke(b.id)).created);
+        assert_eq!(third.clock, second.clock + 1, "exactly one stamp");
     }
 }

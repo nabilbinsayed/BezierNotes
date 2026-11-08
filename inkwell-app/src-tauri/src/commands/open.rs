@@ -273,6 +273,10 @@ pub async fn open_pdf(
         }
         _ => Document::for_pdf(n_pages),
     };
+    // Before the journal replays: page ids are identity, not an edit.
+    if doc.sheets.iter().any(|s| s.page_id == 0) {
+        doc.assign_base_page_ids(&inkwell_core::pdf::base_fingerprint(&arc_bytes));
+    }
 
     for (i, pi) in page_infos.iter_mut().enumerate() {
         if let Some(sheet) = doc.sheets.get(i) {
@@ -435,6 +439,10 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         }
         _ => Document::for_pdf(n_pages),
     };
+    // Before the journal replays: page ids are identity, not an edit.
+    if doc.sheets.iter().any(|s| s.page_id == 0) {
+        doc.assign_base_page_ids(&inkwell_core::pdf::base_fingerprint(&arc_bytes));
+    }
 
     for (i, pi) in page_infos.iter_mut().enumerate() {
         if let Some(sheet) = doc.sheets.get(i) {

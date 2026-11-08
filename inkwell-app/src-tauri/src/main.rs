@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod device;
 mod state;
 mod stylus_linux;
 
@@ -52,6 +53,12 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<AppState>();
+            match app.path().app_config_dir().map_err(|e| e.to_string()).and_then(|dir| device::load_or_create(&dir)) {
+                Ok(me) => *state.device.lock().unwrap() = me,
+                // Keeps the per-launch identity from AppState::default: files
+                // still save, they just look like they came from a new device.
+                Err(e) => eprintln!("[inkwell] WARNING: could not load or store this device's identity: {e}"),
+            }
             let mut pdfium_guard = state.pdfium.lock().unwrap();
             if pdfium_guard.is_none() {
                 if let Ok(res_dir) = app.path().resource_dir() {
