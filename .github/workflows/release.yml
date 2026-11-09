@@ -51,11 +51,25 @@ jobs:
 
       - name: Build Windows App & Bundles
         working-directory: inkwell-app
+        shell: bash
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
+          # Plan 098: each of these switches a feature on when its secrets exist
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
           npm install
-          npx @tauri-apps/cli build --bundles nsis
+          overrides="$(python ../scripts/release_overrides.py windows)"
+          if [ -n "$AZURE_CLIENT_ID" ]; then cargo install trusted-signing-cli --locked; fi
+          if [ -z "$AZURE_CLIENT_ID" ]; then echo "::warning::Windows installer is UNSIGNED (no Azure Trusted Signing secrets); SmartScreen will warn users."; fi
+          npx @tauri-apps/cli build --bundles nsis --config "$overrides"
 
       - name: Package Windows Portable Zip
         shell: pwsh
@@ -63,10 +77,12 @@ jobs:
           $dist = "inkwell-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $dist
           New-Item -ItemType Directory -Force -Path "$dist/bin"
+          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/beziernotes.exe"
+          # the old name, for one release (Plan 098)
           Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/inkwell-app.exe"
-          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/Inkwell.exe"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/bin/"
+          Copy-Item "Launch BezierNotes.bat" -Destination "$dist/"
           Copy-Item "Launch Inkwell.bat" -Destination "$dist/"
           Copy-Item "README.md" -Destination "$dist/"
           Compress-Archive -Path "$dist/*" -DestinationPath "$dist.zip"
@@ -78,6 +94,7 @@ jobs:
           path: |
             inkwell-windows-x64-portable.zip
             inkwell-app/src-tauri/target/release/bundle/nsis/*.exe
+            inkwell-app/src-tauri/target/release/bundle/nsis/*.sig
 
   build-linux:
     name: Build Linux Release (AppImage & DEB)
@@ -130,19 +147,24 @@ jobs:
 
       - name: Build Linux App & Bundles
         working-directory: inkwell-app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
           npm install
-          npx @tauri-apps/cli build
+          npx @tauri-apps/cli build --config "$(python3 ../scripts/release_overrides.py linux)"
 
       - name: Package Linux Portable Tarball
         run: |
           DIST="inkwell-linux-x64-portable"
           mkdir -p "$DIST/bin"
-          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/inkwell-app"
-          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/Inkwell"
+          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/beziernotes"
+          # the old name, for one release (Plan 098)
+          ln -s beziernotes "$DIST/inkwell-app"
           cp bin/libpdfium.so "$DIST/"
           cp bin/libpdfium.so "$DIST/bin/"
-          cp "Launch Inkwell.sh" "$DIST/"
+          cp "Launch BezierNotes.sh" "Launch Inkwell.sh" "$DIST/"
           cp README.md "$DIST/"
           tar -czf "$DIST.tar.gz" "$DIST"
 
@@ -153,6 +175,7 @@ jobs:
           path: |
             inkwell-linux-x64-portable.tar.gz
             inkwell-app/src-tauri/target/release/bundle/appimage/*.AppImage
+            inkwell-app/src-tauri/target/release/bundle/appimage/*.sig
             inkwell-app/src-tauri/target/release/bundle/deb/*.deb
 
   build-fedora-rpm:
@@ -229,10 +252,22 @@ jobs:
       - name: Consolidate Release Assets & Generate Checksums
         run: |
           mkdir -p release-assets
-          find dist-windows dist-linux dist-fedora -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
-          cd release-assets
-          sha256sum * > SHA256SUMS.txt
-          ls -lh
+          find dist-windows dist-linux dist-fedora -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" -o -name "*.sig" \) -exec cp {} release-assets/ \;
+          ls -lh release-assets
+
+      - name: Updater Manifest & AUR PKGBUILD (Plan 098)
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"; [ -n "${{ github.event.inputs.tag_name }}" ] && TAG="${{ github.event.inputs.tag_name }}"
+          VERSION="${TAG#v}"
+          if ls release-assets/*.sig >/dev/null 2>&1; then
+            python3 scripts/make_latest_json.py release-assets "$VERSION" "https://github.com/${{ github.repository }}/releases/download/$TAG"
+          else
+            echo "::warning::No updater signatures (TAURI_SIGNING_PRIVATE_KEY not set): no latest.json, so installed copies won't auto-update."
+          fi
+          APPIMAGE="$(cd release-assets && ls *.AppImage | head -1)"
+          SHA="$(sha256sum "release-assets/$APPIMAGE" | cut -d' ' -f1)"
+          sed -e "s/@VERSION@/$VERSION/" -e "s/@APPIMAGE@/$APPIMAGE/" -e "s/@SHA256@/$SHA/" packaging/aur/PKGBUILD.in > release-assets/PKGBUILD
+          cd release-assets && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS.txt
 
       - name: Determine Tag Name
         id: tag_name
@@ -249,26 +284,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag_name.outputs.tag }}
-          name: "Inkwell Release ${{ steps.tag_name.outputs.tag }}"
+          name: "BezierNotes ${{ steps.tag_name.outputs.tag }}"
           draft: ${{ github.event.inputs.draft || false }}
           prerelease: false
           generate_release_notes: true
           body: |
-            ## Inkwell ${{ steps.tag_name.outputs.tag }} — PDF-Native Ink Annotator
+            ## BezierNotes ${{ steps.tag_name.outputs.tag }}: PDF-native ink annotator
 
-            Welcome to the public release of **Inkwell**!
+            What changed: see `CHANGELOG.md`.
 
             ### 📦 Which file should I download?
 
             #### 🪟 Windows (Windows 10/11 64-bit)
             - **Installer (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_x64-setup.exe` — Standard installer with Start menu & desktop shortcuts.
-            - **Portable**: `inkwell-windows-x64-portable.zip` — No installation needed. Extract and run `Launch Inkwell.bat`.
+            - **Portable**: `inkwell-windows-x64-portable.zip` — No installation needed. Extract and run `Launch BezierNotes.bat`.
 
             #### 🐧 Linux (x86_64)
             - **Universal (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_amd64.AppImage` — Works on Ubuntu, Fedora, Debian, Arch, openSUSE. Make executable (`chmod +x`) and run.
             - **Ubuntu / Debian / Mint / Pop!_OS**: `inkwell_${{ steps.tag_name.outputs.tag }}_amd64.deb` (`sudo dpkg -i inkwell_*.deb`)
             - **Fedora / RHEL / CentOS**: `inkwell-${{ steps.tag_name.outputs.tag }}-1.x86_64.rpm` (`sudo dnf install ./inkwell-*.rpm`)
-            - **Portable**: `inkwell-linux-x64-portable.tar.gz` — Extract and run `./Launch Inkwell.sh`.
+            - **Portable**: `inkwell-linux-x64-portable.tar.gz` — Extract and run `./Launch BezierNotes.sh`.
+            - **Arch / Omarchy**: the attached `PKGBUILD` (`beziernotes-bin`) installs the AppImage.
 
             ---
             *Verify download integrity using the included `SHA256SUMS.txt`.*

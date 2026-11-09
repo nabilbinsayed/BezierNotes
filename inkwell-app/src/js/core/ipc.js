@@ -159,6 +159,31 @@ export async function journalShapeMutation(op, shape, shapeId = null) {
   });
 }
 
+/** The auto-updater's status: { configured, current, available, notes } (Plan 098). */
+export async function checkForUpdate() {
+  return await invokeTauri('check_for_update', {});
+}
+
+/** Download, verify and install the available update, then restart. */
+export async function installUpdate() {
+  return await invokeTauri('install_update', {});
+}
+
+/** Append an error to the local crash log (Plan 098). */
+export async function logFrontendError(message, source = null) {
+  return await invokeTauri('log_frontend_error', { message, source });
+}
+
+/** Open the folder holding the local logs; resolves to its path. */
+export async function openLogsFolder() {
+  return await invokeTauri('open_logs_folder', {});
+}
+
+/** Version, OS, PDFium and log location, for bug reports. */
+export async function diagnosticInfo() {
+  return await invokeTauri('diagnostic_info', {});
+}
+
 /** Append an infinite canvas page (Plan 097); returns its page info. */
 export async function addCanvasPage() {
   return await invokeTauri('add_canvas_page', { seq: nextJournalSeq() });

@@ -16,6 +16,7 @@ import { getViewport } from '../app/viewport-ref.js';
 import { checkForConflictCopies } from '../ui/merge.js';
 import * as shapesModel from '../core/shapes-model.js';
 import * as forms from '../workspace/forms.js';
+import { finishFirstRun } from '../ui/first-run.js';
 
 export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations = false } = {}) {
   if (!res) { hideOpenProgress(); return; }
@@ -92,6 +93,9 @@ export function handlePdfLoadResult(title, pathStr, res, { preserveAnnotations =
       { actions: [{ label: 'Restore them', onClick: () => restoreShelvedChanges(title, pathStr) }] },
     );
   }
+
+  // A document is open: the getting-started cards have done their job.
+  finishFirstRun();
 
   // The PDF's own form fields (Plan 096).
   if (pathStr) setTimeout(() => { forms.loadForm(); }, 300);

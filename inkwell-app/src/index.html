@@ -451,6 +451,23 @@
           <div class="welcome-drop-hint">
             <span class="drop-hint-text">or drag and drop any PDF file anywhere to open</span>
           </div>
+          <section id="firstRunCards" class="first-run hidden" aria-label="Getting started">
+            <div class="first-run-card">
+              <h4>1 · Open a PDF</h4>
+              <p>Any PDF: lecture slides, a textbook, a form. Or start a blank whiteboard.</p>
+            </div>
+            <div class="first-run-card">
+              <h4>2 · Your notes live in the PDF</h4>
+              <p>Ink, notes and shapes are saved inside the file itself, so every PDF reader shows them and cloud sync just works. No separate database.</p>
+            </div>
+            <div class="first-run-card">
+              <h4>3 · Set up your pen</h4>
+              <p>Press harder and lighter here to check pressure:</p>
+              <canvas id="firstRunPressure" class="first-run-pressure" width="240" height="48" aria-label="Pressure test area"></canvas>
+              <button id="btnFirstRunLatency" type="button" class="btn-secondary-pill">Show the latency HUD</button>
+            </div>
+            <button id="btnFirstRunDone" type="button" class="btn-secondary-pill first-run-done">Got it</button>
+          </section>
           <div id="recentFilesContainer" class="recent-files-section hidden">
             <div class="recent-files-header-row">
               <h4 class="recent-files-title">Recent Documents</h4>

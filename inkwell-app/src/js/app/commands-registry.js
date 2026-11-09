@@ -415,6 +415,49 @@ export function registerCoreCommands() {
   });
 
   reg.register({
+    id: 'help.checkUpdates',
+    title: 'Check for Updates',
+    category: 'Help',
+    execute: async () => {
+      const status = await (await import('./updates.js')).checkForUpdates({ force: true });
+      if (status && !status.configured) toast.showToast(`Automatic updates aren't set up in this build (version ${status.current}).`, 'info');
+      return status;
+    },
+  });
+
+  reg.register({
+    id: 'help.openLogs',
+    title: 'Open Logs Folder',
+    category: 'Help',
+    execute: async () => {
+      try {
+        const dir = await ipc.openLogsFolder();
+        if (dir) toast.showToast(`Logs are in ${dir}`, 'info');
+      } catch (err) {
+        toast.showToast('Could not open the logs folder: ' + err, 'error');
+      }
+    },
+  });
+
+  reg.register({
+    id: 'help.copyDiagnostics',
+    title: 'Copy Diagnostic Info',
+    category: 'Help',
+    execute: async () => {
+      try {
+        const info = await ipc.diagnosticInfo();
+        const text = `${info || ''}WebView: ${navigator.userAgent}\n`;
+        await navigator.clipboard.writeText(text);
+        toast.showToast('Diagnostic info copied: paste it into your bug report.', 'success');
+        return text;
+      } catch (err) {
+        toast.showToast('Could not copy diagnostic info: ' + err, 'error');
+        return null;
+      }
+    },
+  });
+
+  reg.register({
     id: 'page.addCanvas',
     title: 'Add Canvas Page (Infinite)',
     category: 'Pages',

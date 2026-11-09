@@ -107,11 +107,11 @@ Pre-compiled standalone packages and installers are available directly on the **
 | Platform | Package / Format | Instructions |
 |---|---|---|
 | **Windows** | **Installer (`.exe` / `.msi`)** | Run `BezierNotes_<version>_x64-setup.exe` (or `.msi`) for desktop integration. |
-| **Windows** | **Portable (`.zip`)** | Extract `inkwell-windows-x64-portable.zip` and run `Launch Inkwell.bat`. Zero installation required. |
+| **Windows** | **Portable (`.zip`)** | Extract `inkwell-windows-x64-portable.zip` and run `Launch BezierNotes.bat`. Zero installation required. |
 | **Linux (Universal)** | **AppImage (`.AppImage`)** | Download `BezierNotes_<version>_amd64.AppImage`, run `chmod +x`, and launch. Compatible with Ubuntu, Fedora, Arch, openSUSE. |
 | **Linux (Ubuntu / Debian)** | **Debian Package (`.deb`)** | Install via `sudo dpkg -i inkwell_*.deb`. |
 | **Linux (Fedora / RHEL)** | **RPM Package (`.rpm`)** | Install via `sudo dnf install ./inkwell-*.rpm`. |
-| **Linux (Portable)** | **Tarball (`.tar.gz`)** | Extract `inkwell-linux-x64-portable.tar.gz` and execute `./Launch Inkwell.sh`. |
+| **Linux (Portable)** | **Tarball (`.tar.gz`)** | Extract `inkwell-linux-x64-portable.tar.gz` and execute `./Launch BezierNotes.sh`. |
 
 > [!TIP]
 > All pre-compiled releases include bundled PDFium dynamic libraries and cryptographic checksums (`SHA256SUMS.txt`).
@@ -221,7 +221,7 @@ BezierNotes is in active development with a verified baseline across all core su
 ### Running on Windows
 ```powershell
 # Run using the desktop launcher:
-.\Launch Inkwell.bat
+.\Launch BezierNotes.bat
 
 # Or run directly via Cargo:
 cd inkwell-app/src-tauri
@@ -231,7 +231,7 @@ cargo run
 ### Running on Linux
 ```bash
 # Execute desktop launcher (Wayland / X11):
-./Launch\ Inkwell.sh
+./Launch\ BezierNotes.sh
 
 # Or run directly via Cargo:
 cd inkwell-app/src-tauri

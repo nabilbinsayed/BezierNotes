@@ -4,6 +4,8 @@
 
 mod commands;
 mod device;
+mod diagnostics;
+mod updates;
 mod state;
 mod stylus_linux;
 
@@ -47,11 +49,15 @@ fn main() {
         }
     }
 
+    // Panics go to the local crash log (Plan 098) before the default report.
+    diagnostics::install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(|app| {
             use tauri::Manager;
+            updates::init(app.handle());
             let state = app.state::<AppState>();
             match app.path().app_config_dir().map_err(|e| e.to_string()).and_then(|dir| device::load_or_create(&dir)) {
                 Ok(me) => *state.device.lock().unwrap() = me,
@@ -146,6 +152,11 @@ fn main() {
             commands::merge::find_conflict_siblings,
             commands::ink::journal_shape_mutation,
             commands::forms::get_form_fields,
+            diagnostics::log_frontend_error,
+            diagnostics::open_logs_folder,
+            diagnostics::diagnostic_info,
+            updates::check_for_update,
+            updates::install_update,
             commands::pages::add_canvas_page,
             commands::forms::set_form_value,
             commands::merge::preview_merge,

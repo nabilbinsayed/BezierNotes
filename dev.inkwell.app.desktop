@@ -2,7 +2,7 @@
 Name=BezierNotes
 GenericName=PDF Ink Annotator
 Comment=Zero-latency vector ink and PDF annotator
-Exec="/mnt/Work/Own Programs/InkWell/Launch Inkwell.sh" %U
+Exec="/mnt/Work/Own Programs/InkWell/Launch BezierNotes.sh" %U
 Icon=dev.inkwell.app
 Terminal=false
 Type=Application

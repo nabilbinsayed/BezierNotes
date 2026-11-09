@@ -134,5 +134,5 @@ fi
 echo -e "\n${BOLD}${GREEN}======================================================${RESET}"
 echo -e "${BOLD}${GREEN}  BezierNotes Omarchy setup complete!                 ${RESET}"
 echo -e "${BOLD}${GREEN}  Launch via application menu or:                     ${RESET}"
-echo -e "     ${BOLD}\"$SCRIPT_DIR/Launch Inkwell.sh\"${RESET}"
+echo -e "     ${BOLD}\"$SCRIPT_DIR/Launch BezierNotes.sh\"${RESET}"
 echo -e "${BOLD}${GREEN}======================================================${RESET}"

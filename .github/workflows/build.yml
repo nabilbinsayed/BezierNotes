@@ -174,6 +174,10 @@ jobs:
       - name: Install PDF Conformance Tools (qpdf, Ghostscript)
         run: sudo apt-get install -y qpdf ghostscript
 
+      - name: Version Consistency (Plan 098)
+        # VERSION drives every manifest; scripts/bump_version.sh syncs them.
+        run: scripts/bump_version.sh --check
+
       - name: Linux Cargo Tests & Clippy
         env:
           # Plan 087: qpdf, Ghostscript and PDFium are required, not skipped.

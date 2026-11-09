@@ -3567,6 +3567,57 @@ with sync_playwright() as pw:
     check("a PDF page inserted at the end goes before the canvas pages", c["insertBeforeCanvas"], f"res={c}")
 
     # -------------------------------------------------------------
+    # T36: First run, diagnostics, updates (Plan 098)
+    # -------------------------------------------------------------
+    print("\n=== T36 First Run & Release Plumbing ===", flush=True)
+    rel_res = pg.evaluate("""(async () => {
+      const out = {};
+      const fr = await import('./js/ui/first-run.js');
+      const stub = window.__inkwell_stub;
+      // a document is open by now, so the getting-started cards are done
+      out.doneAfterOpen = fr.isFirstRun() === false;
+      try { localStorage.removeItem('beziernotes_first_run_done'); } catch (_) {}
+      const cards = document.getElementById('firstRunCards');
+      fr.initFirstRun();
+      out.shownFirstTime = !cards.classList.contains('hidden') && cards.querySelectorAll('.first-run-card').length === 3;
+      out.notModal = !cards.closest('.modal-overlay');
+      document.getElementById('btnFirstRunDone').click();
+      out.dismissed = cards.classList.contains('hidden') && fr.isFirstRun() === false;
+      const btns = Array.from(cards.querySelectorAll('button'));
+      out.targets = btns.every(b => { b.style.display = ''; return true; });
+
+      // help commands exist; the update check reports "not configured"
+      const ids = window.commands.list ? window.commands.list().map(c => c.id) : [];
+      out.helpCommands = ['help.openLogs', 'help.copyDiagnostics', 'help.checkUpdates'].every(id => window.commands.get ? !!window.commands.get(id) : ids.includes(id));
+      stub.check_for_update = async () => ({ configured: false, current: '0.3.0', available: null });
+      const st = await window.commands.execute('help.checkUpdates');
+      out.notConfigured = !!st && st.configured === false
+        && Array.from(document.querySelectorAll('.toast')).some(t => /aren't set up/.test(t.textContent));
+      // an available update is offered, never forced; installing saves first
+      stub.check_for_update = async () => ({ configured: true, current: '0.3.0', available: '0.3.1' });
+      const saves = [], installs = [];
+      stub.save_pdf = async (a) => { saves.push(a); return a.outPathStr; };
+      stub.install_update = async () => { installs.push(1); return null; };
+      const upd = await import('./js/app/updates.js');
+      await upd.checkForUpdates({ force: true });
+      const offer = Array.from(document.querySelectorAll('.toast')).find(t => /0\.3\.1 is available/.test(t.textContent));
+      out.offered = !!offer && !!offer.querySelector('.toast-action');
+      window.state.currentDocPath = '/tmp/x.pdf';
+      window.state.isDirty = true;
+      await upd.installUpdate();
+      out.savedBeforeInstall = saves.length === 1 && installs.length === 1;
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      window.state.isDirty = false;
+      return out;
+    })()""")
+    r = rel_res
+    check("getting-started cards: three, shown on first run, not a modal, dismissed for good", r["doneAfterOpen"] and r["shownFirstTime"] and r["notModal"] and r["dismissed"], f"res={r}")
+    check("Help commands for logs, diagnostics and updates; unconfigured updater says so",
+          r["helpCommands"] and r["notConfigured"], f"res={r}")
+    check("an update is offered (never forced), and installing saves unsaved work first",
+          r["offered"] and r["savedBeforeInstall"], f"res={r}")
+
+    # -------------------------------------------------------------
     # T29: Text-note fonts match the PDF writer (Plan 089)
     # -------------------------------------------------------------
     print("\n=== T29 Text Note Fonts ===", flush=True)

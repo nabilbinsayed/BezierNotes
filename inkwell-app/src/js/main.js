@@ -9,6 +9,8 @@ import * as documentOps from './core/document.js';
 import * as ipc from './core/ipc.js';
 import * as latencyModule from './dev/latency.js';
 import * as forms from './workspace/forms.js';
+import { initFirstRun } from './ui/first-run.js';
+import { initUpdates } from './app/updates.js';
 import * as compositor from './render/compositor.js';
 import * as tiles from './render/tiles.js';
 import * as overlays from './render/overlays.js';
@@ -424,6 +426,17 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.state = state;
   window.__inkwellForms = forms;
   forms.initForms();
+  initFirstRun();
+  initUpdates();
+
+  // Local crash log (Plan 098): uncaught errors go to the log file too.
+  let _loggedErrors = 0;
+  const logError = (message, source) => {
+    if (++_loggedErrors > 50 || !ipc.getInvoke()) return;
+    ipc.logFrontendError(String(message).slice(0, 4000), source).catch(() => {});
+  };
+  window.addEventListener('error', e => logError(e.error && e.error.stack ? e.error.stack : e.message, `${e.filename || ''}:${e.lineno || 0}`));
+  window.addEventListener('unhandledrejection', e => logError(e.reason && e.reason.stack ? e.reason.stack : e.reason, 'unhandledrejection'));
   // Plan 094: synthetic stylus replay and latency numbers, for test_latency.py
   // and for measuring by hand from the devtools console.
   window.__bezierReplay = async (capture, opts) => (await import('./dev/replay.js')).replay(capture, opts);

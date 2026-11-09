@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "BezierNotes",
-  "version": "0.2.0",
+  "mainBinaryName": "beziernotes",
+  "version": "0.3.0",
   "identifier": "dev.inkwell.app",
   "build": {
     "frontendDist": "../src"

@@ -6,7 +6,7 @@
 | **Effort** | M |
 | **Category** | Distribution / Product |
 | **Depends on** | 087–092 (the format and sync work defines v1.0) |
-| **Status** | TODO |
+| **Status** | DONE (2026-11-09; see Outcome) |
 
 ## Why
 
@@ -31,3 +31,45 @@ The product was renamed to BezierNotes (commit `88600be`), but several things st
 
 ## STOP Conditions
 - STOP if changing the identifier is chosen without the migration step. Losing users' saved signatures and shortcuts on update is not acceptable.
+
+## Outcome (2026-11-09)
+
+**Identifier.** Kept as `dev.inkwell.app`, as recommended: it is a legacy internal ID, documented in `docs/release.md`. Users keep their settings, colours, signatures and shortcuts, and there is nothing to migrate. User-facing names are now BezierNotes:
+- `mainBinaryName: beziernotes`;
+- `Launch BezierNotes.sh/.bat`, with the old `Launch Inkwell` names kept as wrappers until 0.4.0;
+- the portable archives ship `beziernotes` plus a compatibility `inkwell-app`;
+- the desktop file, README and `build_omarchy.sh` point at the new launcher.
+
+**Versioning.**
+- `VERSION` is now `0.3.0`. It used to hold a stray PDFium build number that nothing read.
+- `scripts/bump_version.sh` syncs all five manifests (keeping `tauri.conf.json`'s CRLF line endings), and `--check` runs in CI.
+- `scripts/changelog.py` writes `CHANGELOG.md` from conventional commits between `v*` tags. `git-cliff` isn't available here, and the script needs nothing.
+
+**Auto-update** (`src-tauri/src/updates.rs`, `js/app/updates.js`).
+- **Plugin.** `tauri-plugin-updater` is registered only when `tauri.conf.json` carries an updater public key, so an unconfigured build can never fail at startup.
+- **Commands.** `check_for_update` and `install_update`; install refuses while the document is dirty.
+- **UX.** The frontend checks once a day and shows a non-modal "Restart to install" toast. Installing saves first, and the app never restarts on its own. Help → Check for Updates.
+
+**Signing and packaging** (`release.yml`).
+- `scripts/release_overrides.py` turns on, per build, only what that build has secrets for: updater artifacts plus the plugin config, and Azure Trusted Signing (`trusted-signing-cli` as `signCommand`). Without secrets the build still runs and warns that it is unsigned or has no updater.
+- `scripts/make_latest_json.py` writes `latest.json` from the `.sig` files.
+- `packaging/aur/PKGBUILD.in` becomes a `beziernotes-bin` PKGBUILD with the AppImage's checksum.
+- The release notes are rebranded.
+
+**Crash log** (`src-tauri/src/diagnostics.rs`).
+- A panic hook (with backtrace) and `window.onerror`/`unhandledrejection` write to a rotating local log (5 × 1 MB) in the per-user state directory. The frontend has a budget per session.
+- Help → Open Logs Folder and Help → Copy Diagnostic Info (version, OS, PDFium, log location, WebView). Nothing goes over the network.
+
+**First run** (`js/ui/first-run.js`). Three cards on the start screen: open a PDF; your notes live in the PDF; pen setup with a pressure-test pad and the latency HUD. They are not a modal and block nothing, and they're shown until the first document opens or "Got it".
+
+**Verification.**
+- **App tests.** 28/28, adding log rotation keeping five files. Clippy clean.
+- **Smoke.** 196/196. T36, 3 checks: first-run cards, Help commands, the unconfigured updater saying so, an update offered rather than forced, and installing saving first.
+- **Scripts.** The version check passes. `latest.json` and the release overrides were checked with stand-in signatures and secrets. Both workflow files parse.
+
+**Not done (needs the maintainer).**
+- Creating the updater key and the Azure/SignPath account, and adding the secrets: both are one-time steps in `docs/release.md`.
+- The release dry run on a fork (tag `v0.3.0-rc.1`, then installing over 0.2.0 and updating rc.1 → rc.2) has not been run. That needs those secrets and a GitHub runner.
+- The manual Windows + Huion pass and the Acrobat check from the checklist.
+- Publishing to the AUR itself.
+- No Flatpak, as the plan says: only on demand.

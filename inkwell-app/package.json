@@ -1,6 +1,6 @@
 {
   "name": "inkwell-app",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Desktop host for InkWell PDF-native ink annotator",
   "license": "MIT",
   "type": "module",
