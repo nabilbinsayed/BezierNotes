@@ -42,10 +42,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "bin"
-          New-Item -ItemType Directory -Force -Path "inkwell-app/src-tauri/target/release"
+          New-Item -ItemType Directory -Force -Path "target/release"
           curl.exe -fsSL -o pdfium.tgz https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz
           tar.exe -xzf pdfium.tgz
-          Copy-Item "bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
+          Copy-Item "bin/pdfium.dll" -Destination "target/release/pdfium.dll" -Force
           Remove-Item -Force "pdfium.tgz"
           New-Item -ItemType File -Force -Path "bin/libpdfium.so"
 
@@ -66,10 +66,10 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
           npm install
-          overrides="$(python ../scripts/release_overrides.py windows)"
+          python ../scripts/release_overrides.py windows > tauri-release-overrides.json
           if [ -n "$AZURE_CLIENT_ID" ]; then cargo install trusted-signing-cli --locked; fi
           if [ -z "$AZURE_CLIENT_ID" ]; then echo "::warning::Windows installer is UNSIGNED (no Azure Trusted Signing secrets); SmartScreen will warn users."; fi
-          npx @tauri-apps/cli build --bundles nsis --config "$overrides"
+          npx @tauri-apps/cli build --bundles nsis --config tauri-release-overrides.json
 
       - name: Package Windows Portable Zip
         shell: pwsh
@@ -77,9 +77,9 @@ jobs:
           $dist = "inkwell-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $dist
           New-Item -ItemType Directory -Force -Path "$dist/bin"
-          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/beziernotes.exe"
+          Copy-Item "target/release/inkwell-app.exe" -Destination "$dist/beziernotes.exe"
           # the old name, for one release (Plan 098)
-          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/inkwell-app.exe"
+          Copy-Item "target/release/inkwell-app.exe" -Destination "$dist/inkwell-app.exe"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/bin/"
           Copy-Item "Launch BezierNotes.bat" -Destination "$dist/"
@@ -93,8 +93,8 @@ jobs:
           name: release-windows
           path: |
             inkwell-windows-x64-portable.zip
-            inkwell-app/src-tauri/target/release/bundle/nsis/*.exe
-            inkwell-app/src-tauri/target/release/bundle/nsis/*.sig
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.sig
 
   build-linux:
     name: Build Linux Release (AppImage & DEB)
@@ -135,11 +135,11 @@ jobs:
       - name: Fetch Linux PDFium Shared Library
         run: |
           mkdir -p bin
-          mkdir -p inkwell-app/src-tauri/target/release
+          mkdir -p target/release
           wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
           tar -xzf pdfium-linux-x64.tgz
           cp lib/libpdfium.so bin/libpdfium.so
-          cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
+          cp lib/libpdfium.so target/release/libpdfium.so
           sudo cp lib/libpdfium.so /usr/local/lib/libpdfium.so
           sudo ldconfig || true
           touch bin/pdfium.dll
@@ -153,13 +153,14 @@ jobs:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
           npm install
-          npx @tauri-apps/cli build --config "$(python3 ../scripts/release_overrides.py linux)"
+          python3 ../scripts/release_overrides.py linux > tauri-release-overrides.json
+          npx @tauri-apps/cli build --config tauri-release-overrides.json
 
       - name: Package Linux Portable Tarball
         run: |
           DIST="inkwell-linux-x64-portable"
           mkdir -p "$DIST/bin"
-          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/beziernotes"
+          cp target/release/inkwell-app "$DIST/beziernotes"
           # the old name, for one release (Plan 098)
           ln -s beziernotes "$DIST/inkwell-app"
           cp bin/libpdfium.so "$DIST/"
@@ -174,9 +175,9 @@ jobs:
           name: release-linux
           path: |
             inkwell-linux-x64-portable.tar.gz
-            inkwell-app/src-tauri/target/release/bundle/appimage/*.AppImage
-            inkwell-app/src-tauri/target/release/bundle/appimage/*.sig
-            inkwell-app/src-tauri/target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.sig
+            target/release/bundle/deb/*.deb
 
   build-fedora-rpm:
     name: Build Fedora RPM Package
@@ -203,11 +204,11 @@ jobs:
       - name: Fetch Fedora PDFium Shared Library
         run: |
           mkdir -p bin
-          mkdir -p inkwell-app/src-tauri/target/release
+          mkdir -p target/release
           wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
           tar -xzf pdfium-linux-x64.tgz
           cp lib/libpdfium.so bin/libpdfium.so
-          cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
+          cp lib/libpdfium.so target/release/libpdfium.so
           cp lib/libpdfium.so /usr/lib64/libpdfium.so || true
           touch bin/pdfium.dll
           rm -rf pdfium-linux-x64.tgz lib include args.gn
@@ -222,7 +223,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-fedora
-          path: inkwell-app/src-tauri/target/release/bundle/rpm/*.rpm
+          path: target/release/bundle/rpm/*.rpm
 
   publish-release:
     name: Publish GitHub Release
@@ -296,13 +297,13 @@ jobs:
             ### 📦 Which file should I download?
 
             #### 🪟 Windows (Windows 10/11 64-bit)
-            - **Installer (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_x64-setup.exe` — Standard installer with Start menu & desktop shortcuts.
+            - **Installer (Recommended)**: `BezierNotes_<version>_x64-setup.exe` — Standard installer with Start menu & desktop shortcuts.
             - **Portable**: `inkwell-windows-x64-portable.zip` — No installation needed. Extract and run `Launch BezierNotes.bat`.
 
             #### 🐧 Linux (x86_64)
-            - **Universal (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_amd64.AppImage` — Works on Ubuntu, Fedora, Debian, Arch, openSUSE. Make executable (`chmod +x`) and run.
-            - **Ubuntu / Debian / Mint / Pop!_OS**: `inkwell_${{ steps.tag_name.outputs.tag }}_amd64.deb` (`sudo dpkg -i inkwell_*.deb`)
-            - **Fedora / RHEL / CentOS**: `inkwell-${{ steps.tag_name.outputs.tag }}-1.x86_64.rpm` (`sudo dnf install ./inkwell-*.rpm`)
+            - **Universal (Recommended)**: `BezierNotes_<version>_amd64.AppImage` — Works on Ubuntu, Fedora, Debian, Arch, openSUSE. Make executable (`chmod +x`) and run.
+            - **Ubuntu / Debian / Mint / Pop!_OS**: `BezierNotes_<version>_amd64.deb` (`sudo apt install ./BezierNotes_*.deb`)
+            - **Fedora / RHEL / CentOS**: `BezierNotes-<version>-1.x86_64.rpm` (`sudo dnf install ./BezierNotes-*.rpm`)
             - **Portable**: `inkwell-linux-x64-portable.tar.gz` — Extract and run `./Launch BezierNotes.sh`.
             - **Arch / Omarchy**: the attached `PKGBUILD` (`beziernotes-bin`) installs the AppImage.
 
