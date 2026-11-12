@@ -11,7 +11,6 @@
     "lint:ci": "node --check src/js/main.js && node --check src/js/core/ipc.js"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4",
-    "@tauri-apps/cli-linux-x64-gnu": "^2.11.4"
+    "@tauri-apps/cli": "^2.11.4"
   }
 }
