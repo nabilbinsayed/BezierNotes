@@ -77,9 +77,9 @@ jobs:
           $dist = "inkwell-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $dist
           New-Item -ItemType Directory -Force -Path "$dist/bin"
-          Copy-Item "target/release/inkwell-app.exe" -Destination "$dist/beziernotes.exe"
+          Copy-Item "target/release/beziernotes.exe" -Destination "$dist/beziernotes.exe"
           # the old name, for one release (Plan 098)
-          Copy-Item "target/release/inkwell-app.exe" -Destination "$dist/inkwell-app.exe"
+          Copy-Item "target/release/beziernotes.exe" -Destination "$dist/inkwell-app.exe"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/bin/"
           Copy-Item "Launch BezierNotes.bat" -Destination "$dist/"
@@ -160,7 +160,7 @@ jobs:
         run: |
           DIST="inkwell-linux-x64-portable"
           mkdir -p "$DIST/bin"
-          cp target/release/inkwell-app "$DIST/beziernotes"
+          cp target/release/beziernotes "$DIST/beziernotes"
           # the old name, for one release (Plan 098)
           ln -s beziernotes "$DIST/inkwell-app"
           cp bin/libpdfium.so "$DIST/"
